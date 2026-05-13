@@ -59,6 +59,8 @@ Beyond v0 (if traction):
 
 ⭐ **Star the repo** to get notified when v0 ships.
 
+📋 **[Detailed Roadmap (v0 → v3)](docs/ROADMAP.md)** — phasing, always-on extension, and design principles.
+
 ## Why I'm building this
 
 I'm a solo ML engineer running production recommendation systems at 300–400K DAU scale. After a month of work on a single carousel pipeline, I couldn't keep the system in my own head — and reading my own `.md` / `.html` docs didn't help. Existing tools addressed structure, not intent.

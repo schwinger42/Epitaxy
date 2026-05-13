@@ -15,6 +15,10 @@ dist/
 .idea/
 .vscode/
 
+# AI agent state
+.claude/
+.agent/
+
 # Project
 .epitaxy/        # generated POR data when dogfooding
 *.log
