@@ -26,7 +26,7 @@ Epitaxy treats your ML repo like a semiconductor wafer — layer by layer:
 
 2. **Hierarchical drill-down explorer** — project → pipeline → module → function, with intent visible at every level. Click any reference, jump anywhere.
 
-3. **MCP-native from day 1** — your AI agent (Claude Code, Cursor, Cody) queries intent through MCP tools: `por_explain(module)`, `por_trace(param)`, `por_lineage(asset)`. No more "I think this is because…".
+3. **MCP-native from day 1** — your AI agent (Claude Code, Codex, Cursor, or any MCP client) queries intent through MCP tools: `por_explain(module)`, `por_trace(param)`, `por_lineage(asset)`. No more "I think this is because…".
 
 4. **Solo-engineer scale** — no Backstage deployment, no enterprise contract. `pip install epitaxy && epi init`.
 

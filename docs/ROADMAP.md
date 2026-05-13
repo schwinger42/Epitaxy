@@ -28,7 +28,7 @@ The hardest pillar. The intent layer must stay fresh as code evolves, otherwise 
 
 **Pillar 2a — In-session (AI agent–driven)**
 
-Trigger: an AI agent (Claude Code, Cursor) is actively writing code in a session.
+Trigger: an AI agent (Claude Code, Codex, Cursor) is actively writing code in a session.
 
 Epitaxy's MCP server exports **prompts** (not just tools — this is MCP's underused capability). When an agent connects, it picks up Epitaxy's prompts and learns the protocol:
 
@@ -71,7 +71,7 @@ Each piece of intent text shows provenance: `🤖 LLM-extracted (confidence: 0.8
 
 The MCP server. Input: same artifacts as Pillar 3, accessed programmatically.
 
-Tools exposed to any AI agent (Claude Code, Cursor, Cody, future agents):
+Tools exposed to any AI agent (Claude Code, Codex, Cursor, future agents):
 
 - `por_explain(module)` — full intent dump for a module
 - `por_trace(param)` — decision trail for a parameter (where defined, all reasons given, all changes over time)
@@ -219,7 +219,7 @@ Explicit non-goals — Epitaxy is NOT trying to be these things:
 
 - **NOT a Backstage replacement.** Backstage targets enterprise governance / catalog at org scale. Epitaxy targets a single solo-maintained ML codebase. Different cell.
 - **NOT an autodocgen.** Tools like Autodoc and `doc-comments-ai` generate docstrings from code structure. Epitaxy is intent-first; structured-text generation is a side effect, not the product.
-- **NOT an LLM coding assistant.** Epitaxy doesn't write production code for you. It maintains the intent layer around code so that other tools (Claude Code, Cursor, Cody) write better code.
+- **NOT an LLM coding assistant.** Epitaxy doesn't write production code for you. It maintains the intent layer around code so that other tools (Claude Code, Codex, Cursor) write better code.
 - **NOT a vector code-search tool.** Cursor's `@codebase` and Cody already do semantic search well. Epitaxy is structured intent (typed fields: `goal`, `why`, `prereqs`, `effects`, `decisions`), not free-text vector retrieval.
 - **NOT a project management tool.** No tickets, no sprints, no roadmap-as-product. (This ROADMAP.md is for design, not project tracking.)
 
@@ -233,7 +233,7 @@ These are deliberately unresolved; the plan is to pick after evidence from v0+ r
 
 - **ADR format compatibility** — adopt existing (`madr`, `adr-tools`) or define Epitaxy's own ADR schema? Default: adopt existing. Revisit if existing schemas don't carry enough metadata for MCP query tools.
 
-- **MCP prompt schema stability across clients** — Pillar 2a depends on MCP `prompts/` working uniformly across Claude Code / Cursor / Cody. The spec is stable as of 2026-05-13 but adoption lags in some clients. Ship Pillar 2a for Claude Code first; add other clients when their prompt support matures.
+- **MCP prompt schema stability across clients** — Pillar 2a depends on MCP `prompts/` behaving uniformly across clients, and adoption varies. **Decision (2026-05-13): Claude Code and Codex are first-class dogfood targets** — Pillar 2a (v1) is tested against both as a release gate before announcement. Cursor and other MCP clients added when their `prompts/` support reaches feature parity.
 
 - **POR location: docstring vs CLAUDE.md** — should structured POR live as YAML frontmatter in code docstrings, or as sections inside `CLAUDE.md`, or both? Need v0 dogfooding evidence before committing to a canonical form.
 
