@@ -1,0 +1,35 @@
+[project]
+name = "epitaxy"
+version = "0.0.1"
+description = "Process-of-Record (POR) explorer for ML codebases — built for AI agents to understand intent, not just structure."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Baron Wang", email = "90270661+schwinger42@users.noreply.github.com" }
+]
+requires-python = ">=3.10"
+keywords = ["mcp", "codebase", "documentation", "ml-pipelines", "developer-tools", "intent", "por"]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/schwinger42/Epitaxy"
+Issues = "https://github.com/schwinger42/Epitaxy/issues"
+
+# No dependencies yet — placeholder repo only. v0 will add:
+# - pyyaml (POR schema parsing)
+# - pydantic (schema validation)
+# - click or typer (CLI)
+# - mcp (Anthropic MCP SDK)
