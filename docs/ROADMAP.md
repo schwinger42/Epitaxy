@@ -49,7 +49,7 @@ Four event-driven daemons, each catching a different change source:
 - **GitHub Action** (CI integration) — auto-open drift-PR with proposed `CLAUDE.md` updates after merge to main.
 - **Cron health check** (daily) — scan for: dirs that grew past nested-CLAUDE.md threshold, stale ADR references, orphaned modules with no `CLAUDE.md` mention anywhere.
 
-All four follow LLM-drafts-human-commits (§4) — proposals to `.epitaxy/drift/`, never autonomous applies.
+All four follow LLM-drafts-human-commits (§6) — proposals to `.epitaxy/drift/`, never autonomous applies.
 
 ### Pillar 3 — Consume
 
@@ -94,7 +94,89 @@ Tools exposed to any AI agent (Claude Code, Cursor, Cody, future agents):
 
 Each phase gated on 4-8 weeks of observation from the previous. Decisive non-traction → stop; blog post + portfolio piece is the payoff regardless of which version Epitaxy stops at.
 
-## 4. Safety design — LLM-drafts-human-commits
+## 4. Design Principle — Progressive Enhancement
+
+All Epitaxy static output (Pillar 3 explorer pages, and the v2/v3 HTML
+Explainer Generator) follows the **"CSS-first, JS islands"** pattern,
+inspired by `phase2_new_released.html` — a 1705-line hand-written
+pedagogical doc that proves the pattern at production quality.
+
+**Distribution of responsibility:**
+
+- **Semantic HTML** drives structure (`<section>`, `<details>`, `<figure>`,
+  `<dl>`). Accessibility automatic, SEO-friendly, AI-readable.
+- **CSS** drives layout, drill-down (`<details>/<summary>`), hover glossary
+  (`:hover`), navigation (`:target`), sticky positioning, theming.
+- **JS islands** ONLY for capabilities CSS cannot deliver:
+  - Math typesetting (KaTeX)
+  - Flowchart diagrams (Mermaid) — or hand-written SVG to avoid JS entirely
+  - Copy-to-clipboard buttons
+  - Syntax highlighting (preferred: server-rendered via Shiki at build time)
+
+**Explicitly out of scope for static output (require JS, layered ABOVE static base):**
+
+- Pillar 2b live drift-badge updates → WebSocket / Server-Sent Events
+- Pillar 4 in-browser MCP queries → JS HTTP client
+- Pillar 3 stretch — interactive graph (pan/zoom/expand) → Cytoscape.js or ReactFlow
+
+**Why this principle:**
+
+- Forces semantic-first thinking — you cannot paper over bad structure with JS
+- Accessibility automatic (screen readers love semantic HTML)
+- SEO benefit (static content indexes reliably)
+- No build-step bloat — `epi serve` starts in ~200ms, not 8s
+- Aligns with 2026 industry direction (Astro, Tailwind's "progressive enhancement")
+- Output renders in any browser, archive-stable — Pillar 1 BOOTSTRAP value is
+  unaffected by future JS framework churn
+
+## 5. Stretch (v2/v3) — HTML Explainer Generator
+
+Inspired by hand-written pedagogical docs like the 1705-line RecSys
+`phase2_new_released.html`, Epitaxy in v2/v3 can compose a similar-quality
+HTML explainer for any subsystem by combining structured POR data with
+LLM-written narrative segments. Output follows the Progressive Enhancement
+principle above.
+
+**Template features extracted from the reference doc:**
+
+- Multi-audience framing (new teammate / interviewer / future-self)
+- Story-arc structure (legacy → architecture → tuning → fix → A/B)
+- `<details>` drill-down for depth (CSS-only)
+- Glossary hover popovers (CSS-only)
+- Q&A pressure-test section (interview-ready 2-min answers)
+- Failure modes + recovery procedure tables
+- Timezone audit / cross-source rules
+- Decision provenance with audit history (e.g., "owning a mistake" retrospectives)
+
+**Workflow:**
+
+1. User provides structured POR docstrings + ADRs + commits (the truth layer).
+2. Epitaxy LLM composes prose narrative segments from that truth.
+3. User reviews narrative (structured data was already verified during extraction).
+4. Commit. Future parameter changes trigger Pillar 2b drift detection, which
+   proposes amendments to affected narrative segments — never the structured layer.
+
+**Why this is the right v2/v3 stretch:**
+
+- Hand-written pedagogical docs are "human gold standard" — 100% quality, but
+  don't scale (a single solo engineer cannot hand-write 10 of these).
+- LLM-composed at 80% quality × 10 subsystems × always-fresh
+  >> 100% × 1 × drift.
+- No competitor produces pedagogical HTML explainers from code intent.
+- Demo asset: the reference `phase2_new_released.html` IS the target output
+  spec — any reviewer / interviewer / hiring manager can compare Epitaxy's
+  auto-output side-by-side with the human gold standard.
+
+**Anti-pattern to avoid:**
+
+LLM auto-publishing without human review of the narrative layer.
+Structured data is auto-verified (extracted from ground truth). **Prose
+narrative ALWAYS gets human approval before commit.** Hallucinated narrative
+in a pedagogical doc is worse than no doc — it teaches wrong things to new
+hires and lies in interviews. The human-in-the-loop gate is non-negotiable
+for this feature.
+
+## 6. Safety design — LLM-drafts-human-commits
 
 **Principle**: never autonomous edits to truth sources.
 
@@ -119,7 +201,7 @@ Each phase gated on 4-8 weeks of observation from the previous. Decisive non-tra
 
 **Rule of thumb**: blast radius determines sacredness, NOT output type. An LLM-generated cross-ref rename can auto-apply; a human-typed ADR change still needs review (because it's an ADR, not because of who wrote it).
 
-## 5. Positioning — where Epitaxy lives in the platform-tools landscape
+## 7. Positioning — where Epitaxy lives in the platform-tools landscape
 
 Epitaxy occupies a specific cell in the dev-infrastructure space. The clearest framing is by analogy to existing always-on tools, not by competitor comparison:
 
@@ -131,7 +213,7 @@ The common shape: event-driven, generates proposals, requires human approval for
 
 This is the "always-on knowledge maintenance" angle that elevates Epitaxy from "explorer tool" to **dev infrastructure for AI-agent-native engineering**. The interview answer to "tell me about a system you designed" writes itself: depth across in-session AI integration (Pillar 2a), event-driven daemons (Pillar 2b), and human-in-the-loop safety (LLM-drafts-human-commits).
 
-## 6. Non-goals
+## 8. Non-goals
 
 Explicit non-goals — Epitaxy is NOT trying to be these things:
 
@@ -141,7 +223,7 @@ Explicit non-goals — Epitaxy is NOT trying to be these things:
 - **NOT a vector code-search tool.** Cursor's `@codebase` and Cody already do semantic search well. Epitaxy is structured intent (typed fields: `goal`, `why`, `prereqs`, `effects`, `decisions`), not free-text vector retrieval.
 - **NOT a project management tool.** No tickets, no sprints, no roadmap-as-product. (This ROADMAP.md is for design, not project tracking.)
 
-## 7. Open design questions
+## 9. Open design questions
 
 These are deliberately unresolved; the plan is to pick after evidence from v0+ rather than guessing now.
 
