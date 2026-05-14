@@ -45,12 +45,12 @@ Epitaxy treats your ML repo like a semiconductor wafer — layer by layer:
 🚧 **v0 in development** — this README is a public claim of the design space.
 🎯 **v0 ship target:** ~3 weeks from June 2026.
 
-What v0 will include:
-- [ ] POR schema spec (YAML frontmatter)
-- [ ] Python AST parser → POR data layer (JSON)
-- [ ] CLI: `epi explain` / `epi trace` / `epi lineage`
-- [ ] MCP server (read-only)
-- [ ] Markdown explorer (static site generator)
+What v0 will include (design specs shipped 2026-05-15; code implementation begins next):
+
+- [ ] Python AST parser → intent-graph JSON — _spec'd: [docs/SCHEMA.md](docs/SCHEMA.md) (7 node types, 4 edge types)_
+- [ ] CLI: `epi sync` / `epi serve` / `epi mcp` — _spec'd: [docs/CLI.md](docs/CLI.md)_
+- [ ] MCP server (read-only): `por_explain` / `por_trace` / `por_lineage` — _spec'd: [docs/MCP.md](docs/MCP.md)_
+- [ ] Static markdown drill-down site (Pillar 3)
 
 Beyond v0 (if traction):
 - [ ] Interactive graph UI (ReactFlow / Cytoscape)

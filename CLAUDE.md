@@ -10,9 +10,9 @@ Public repo: https://github.com/schwinger42/Epitaxy
 
 ## Status
 
-🚧 **v0 design-space-claim phase, 2026-05-13**: README + LICENSE + .gitignore + pyproject.toml shipped; first commit pushed. **NO Python code yet.** Implementation gated on RecSys Phase 2 (Statsig launch) shipping first (~2-3 weeks from 2026-05-13).
+📐 **v0 design-doc phase shipped 2026-05-15**: SCHEMA + CLI + MCP design specs on origin. Gate lifted 2026-05-14 (RecSys Phase 2 launched). **Parser implementation begins next.** Still no Python code in `src/epitaxy/`.
 
-Detail: [docs/ROADMAP.md](docs/ROADMAP.md).
+Detail: [docs/ROADMAP.md](docs/ROADMAP.md) · specs: [docs/SCHEMA.md](docs/SCHEMA.md) · [docs/CLI.md](docs/CLI.md) · [docs/MCP.md](docs/MCP.md).
 
 ## Future layout (placeholder — applies when v0 implementation begins)
 
@@ -31,7 +31,7 @@ Detail: [docs/ROADMAP.md](docs/ROADMAP.md).
 └── pyproject.toml
 ```
 
-**Do not pre-create `src/epitaxy/` skeleton before v0 work actually starts.** The repo stays placeholder-only until RecSys Phase 2 ships.
+v0 implementation begins 2026-05-15. `src/epitaxy/` skeleton is created on demand as each pillar's code lands — don't scaffold empty dirs ahead of need.
 
 ## Core principles (binding for any session writing Epitaxy code)
 
@@ -45,9 +45,7 @@ Detail: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Current focus
 
-Waiting on RecSys Phase 2 (fresh_min_tier Round 3 + Statsig 3-arm A/B launch) to ship. When that lands (~early June 2026), return here for v0 implementation: Pillar 3 (Consume) + Pillar 4 (Query), read-only on user repo, ~3-5 focused days.
-
-Until then: design discussions and roadmap edits are fine; no code, no `src/epitaxy/`, no MCP server init.
+**Active: v0 parser implementation.** Design surface complete ([SCHEMA](docs/SCHEMA.md) / [CLI](docs/CLI.md) / [MCP](docs/MCP.md)) — next is `src/epitaxy/` skeleton + `epi sync` Python AST → index.json pipeline + `epi serve` drill-down + `epi mcp serve`. Pillar 3 (Consume) + Pillar 4 (Query), read-only on user repo, ~3-5 focused days per [ROADMAP §3](docs/ROADMAP.md#3-phasing-v0--v3).
 
 ## Detail reference
 
