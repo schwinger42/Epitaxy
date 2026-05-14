@@ -182,6 +182,57 @@ def sync(
         )
 
 
+@app.command()
+def serve(
+    port: int = typer.Option(4321, "--port", help="HTTP port (default 4321)."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host (default loopback)."),
+    index: Optional[Path] = typer.Option(
+        None,
+        "--index",
+        help="Path to .epitaxy/index.json (default: cwd/.epitaxy/index.json).",
+    ),
+    no_open: bool = typer.Option(False, "--no-open", help="Skip auto-launching the browser."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    quiet: bool = typer.Option(False, "--quiet", "-q"),
+) -> None:
+    """Serve the Pillar-3 drill-down site (ugly-but-functional PR1 build)."""
+    from http.server import HTTPServer
+
+    from epitaxy.serve.app import build_handler
+
+    if verbose and quiet:
+        typer.echo("error: --verbose and --quiet are mutually exclusive.", err=True)
+        raise typer.Exit(2)
+
+    index_path = index if index else (Path.cwd() / ".epitaxy" / "index.json")
+    if not index_path.exists():
+        typer.echo(
+            f"error: index not found at {index_path}. Run `epi sync` first.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    handler = build_handler(index_path)
+    httpd = HTTPServer((host, port), handler)
+
+    url = f"http://{host}:{port}/"
+    if not quiet:
+        typer.echo(f"serving {index_path} at {url} (Ctrl-C to stop)", err=True)
+
+    if not no_open:
+        import webbrowser
+
+        webbrowser.open(url)
+
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        if not quiet:
+            typer.echo("\nshutting down", err=True)
+    finally:
+        httpd.server_close()
+
+
 mcp_app = typer.Typer(
     no_args_is_help=True,
     help="Pillar-4 MCP server commands.",
