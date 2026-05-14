@@ -11,8 +11,10 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+import re
+
 from epitaxy.cli.app import app
-from epitaxy.serve.app import build_handler, render_index
+from epitaxy.serve.app import _anchor_for, build_handler, render_index
 from epitaxy.store import read_index
 
 
@@ -46,6 +48,20 @@ def test_render_includes_function_signatures(synced_index: Path) -> None:
     html = render_index(read_index(synced_index))
     assert "def load(" in html
     assert "def fit(self)" in html
+
+
+def test_anchor_for_only_contains_attribute_safe_chars():
+    """Locks the contract: anchors always match `n-[0-9a-f]+` (Codex Medium-2)."""
+    pattern = re.compile(r"^n-[0-9a-f]+$")
+    for node_id in [
+        "module:src/x.py",
+        "function:src/x.py::Cls.method",
+        'module:src/weird"path.py',  # quote — would have broken attribute before
+        "module:src/<script>.py",  # angle brackets
+        "module:src/&amp;.py",  # ampersand
+    ]:
+        anchor = _anchor_for(node_id)
+        assert pattern.match(anchor), f"anchor {anchor!r} not attr-safe for input {node_id!r}"
 
 
 def test_render_escapes_html_in_docstrings(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ Progressive-Enhancement rewrite per ROADMAP §4 is PR3 territory.
 
 from __future__ import annotations
 
+import hashlib
 import html as html_lib
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -19,8 +20,17 @@ def _esc(text: str | None) -> str:
 
 
 def _anchor_for(node_id: str) -> str:
-    """Stable per-page anchor — strip chars that complicate URL fragments."""
-    return "n-" + node_id.replace(":", "-").replace("/", "-").replace(".", "-")
+    """Hash-based stable anchor — guaranteed safe for use in HTML attributes
+    (href / id) without further escaping.
+
+    Codex review Medium-2: the prior approach char-substituted `:` `/` `.`
+    out of the node_id but left through `"` `'` `<` `>` `&` and whitespace
+    untouched. A repo path containing any of those would break out of the
+    quoted attribute. Hashing produces a constant `[0-9a-f]+` alphabet that
+    is safe in attributes by construction, and shorter on the wire.
+    """
+    digest = hashlib.sha1(node_id.encode("utf-8")).hexdigest()[:12]
+    return f"n-{digest}"
 
 
 def render_index(index: Index) -> str:
