@@ -68,10 +68,13 @@ class IndexConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    roots: list[str]
+    roots: list[str] = Field(default_factory=lambda: ["src/**/*.py"])
     adr_dir: str = "decisions/"
     plan_dir: str = "docs/plans/"
     parameters_enabled: bool = False
+    excludes: list[str] = Field(
+        default_factory=lambda: ["**/test_*.py", "**/conftest.py"]
+    )
 
 
 class IndexStats(BaseModel):

@@ -1,0 +1,186 @@
+"""`epi` CLI entry point.
+
+See docs/CLI.md for the user-facing contract. PR1 ships `sync` only;
+`mcp` lands in commit 5 and `serve` in commit 6 (both on this PR1 branch).
+"""
+
+from __future__ import annotations
+
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+import typer
+
+from epitaxy import __version__
+from epitaxy.parser import parse_repo
+from epitaxy.store import Index, IndexConfig, IndexStats, write_index
+
+
+app = typer.Typer(
+    no_args_is_help=True,
+    help="Epitaxy — Process-of-Record explorer for ML codebases.",
+)
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"epi {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
+) -> None:
+    """Top-level entry — see `epi sync --help` etc. for subcommand usage."""
+
+
+def _load_tomllib():
+    if sys.version_info >= (3, 11):
+        import tomllib
+
+        return tomllib
+    import tomli  # type: ignore[import-not-found]
+
+    return tomli
+
+
+def _load_config(repo_root: Path) -> IndexConfig:
+    """Read `[tool.epitaxy]` from `pyproject.toml`; fall back to defaults."""
+    toml_path = repo_root / "pyproject.toml"
+    if not toml_path.exists():
+        return IndexConfig()
+
+    tomllib = _load_tomllib()
+    try:
+        data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as e:
+        typer.echo(f"error: malformed pyproject.toml: {e}", err=True)
+        raise typer.Exit(2) from e
+
+    tool_cfg = data.get("tool", {}).get("epitaxy", {})
+    if not tool_cfg:
+        return IndexConfig()
+    try:
+        return IndexConfig.model_validate(tool_cfg)
+    except Exception as e:
+        typer.echo(f"error: invalid [tool.epitaxy] config: {e}", err=True)
+        raise typer.Exit(2) from e
+
+
+def _resolve_files(repo_root: Path, roots: list[str], excludes: list[str]) -> list[Path]:
+    found: set[Path] = set()
+    for pat in roots:
+        for p in repo_root.glob(pat):
+            if p.is_file() and p.suffix == ".py":
+                found.add(p.resolve())
+    excluded: set[Path] = set()
+    for pat in excludes:
+        for p in repo_root.glob(pat):
+            excluded.add(p.resolve())
+    return sorted(found - excluded)
+
+
+def _gitignore_lists_epitaxy(repo_root: Path) -> bool:
+    g = repo_root / ".gitignore"
+    if not g.exists():
+        return False
+    for raw in g.read_text(encoding="utf-8").splitlines():
+        s = raw.strip()
+        if s in (".epitaxy/", ".epitaxy", ".epitaxy/index.json"):
+            return True
+    return False
+
+
+@app.command()
+def sync(
+    parameters: bool = typer.Option(
+        False,
+        "--parameters",
+        help="Enable parameter extraction (not implemented in PR1 — fails fast).",
+    ),
+    roots: Optional[list[str]] = typer.Option(
+        None,
+        "--roots",
+        help="Override [tool.epitaxy].roots (repeatable; replaces, not merges).",
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        help="Path to write the index JSON (default: .epitaxy/index.json).",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Per-file parse summary."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Errors only."),
+) -> None:
+    """Parse the repo and write `.epitaxy/index.json`."""
+    if parameters:
+        typer.echo(
+            "error: --parameters is not implemented in this build "
+            "(PR1 tracer-bullet). Tracking in PR4.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    if verbose and quiet:
+        typer.echo("error: --verbose and --quiet are mutually exclusive.", err=True)
+        raise typer.Exit(2)
+
+    repo_root = Path.cwd()
+    config = _load_config(repo_root)
+    if roots:
+        config = config.model_copy(update={"roots": list(roots)})
+
+    py_files = _resolve_files(repo_root, config.roots, config.excludes)
+
+    if verbose:
+        typer.echo(
+            f"parsing {len(py_files)} file(s) from roots={config.roots}",
+            err=True,
+        )
+
+    nodes, edges = parse_repo(repo_root, py_files)
+
+    stats = IndexStats(
+        modules=sum(1 for n in nodes if n.type == "module"),
+        functions=sum(1 for n in nodes if n.type == "function"),
+        edges=len(edges),
+    )
+
+    index = Index(
+        generated_at=datetime.now(timezone.utc),
+        generator=f"epitaxy {__version__}",
+        repo_root=str(repo_root.resolve()),
+        config=config,
+        stats=stats,
+        nodes=nodes,
+        edges=edges,
+    )
+
+    out_path = output if output else (repo_root / ".epitaxy" / "index.json")
+    write_index(index, out_path)
+
+    if not _gitignore_lists_epitaxy(repo_root):
+        typer.echo(
+            "tip: add `.epitaxy/` to your .gitignore "
+            "(or `.epitaxy/index.json` to track-but-ignore).",
+            err=True,
+        )
+
+    if not quiet:
+        typer.echo(
+            f"wrote {out_path} "
+            f"({stats.modules} modules, {stats.functions} functions, {stats.edges} edges)",
+            err=True,
+        )
+
+
+if __name__ == "__main__":  # pragma: no cover
+    app()

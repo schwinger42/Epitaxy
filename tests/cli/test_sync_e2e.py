@@ -1,0 +1,99 @@
+"""End-to-end tests for `epi sync` — uses the sample_repo fixture."""
+
+from __future__ import annotations
+
+import json
+import shutil
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from epitaxy.cli.app import app
+
+
+FIXTURE = Path(__file__).parent.parent / "fixtures" / "sample_repo"
+runner = CliRunner()
+
+
+@pytest.fixture
+def sample_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Copy sample_repo fixture into tmp_path and chdir to it."""
+    dest = tmp_path / "repo"
+    shutil.copytree(FIXTURE, dest)
+    monkeypatch.chdir(dest)
+    return dest
+
+
+def test_sync_writes_index_json(sample_repo: Path) -> None:
+    result = runner.invoke(app, ["sync", "--quiet"])
+    assert result.exit_code == 0, result.output
+
+    index_path = sample_repo / ".epitaxy" / "index.json"
+    assert index_path.exists()
+
+
+def test_sync_index_contains_expected_modules_and_functions(sample_repo: Path) -> None:
+    result = runner.invoke(app, ["sync", "--quiet"])
+    assert result.exit_code == 0
+
+    payload = json.loads((sample_repo / ".epitaxy" / "index.json").read_text())
+    module_ids = {n["id"] for n in payload["nodes"] if n["type"] == "module"}
+    assert "module:src/sample/data.py" in module_ids
+    assert "module:src/sample/model.py" in module_ids
+    assert "module:src/sample/boundary.py" in module_ids
+
+    fn_ids = {n["id"] for n in payload["nodes"] if n["type"] == "function"}
+    assert "function:src/sample/data.py::load" in fn_ids
+    assert "function:src/sample/model.py::M.fit" in fn_ids
+
+
+def test_sync_index_contains_expected_edges(sample_repo: Path) -> None:
+    result = runner.invoke(app, ["sync", "--quiet"])
+    assert result.exit_code == 0
+
+    payload = json.loads((sample_repo / ".epitaxy" / "index.json").read_text())
+    edges = payload["edges"]
+    edge_pairs = {(e["from"], e["to"]) for e in edges}
+
+    # import-based module edge
+    assert (
+        "module:src/sample/model.py",
+        "module:src/sample/data.py",
+    ) in edge_pairs
+    # imported-name call edge
+    assert (
+        "function:src/sample/model.py::M.fit",
+        "function:src/sample/data.py::load",
+    ) in edge_pairs
+
+
+def test_sync_parameters_flag_fails_fast(sample_repo: Path) -> None:
+    """`--parameters` must exit 2 with informative message, NOT silently no-op.
+
+    Otherwise downstream `por_trace` ParameterParsingDisabled hint loops the user.
+    """
+    result = runner.invoke(app, ["sync", "--parameters"])
+    assert result.exit_code == 2
+    assert "not implemented in this build" in result.output
+    assert "PR4" in result.output
+
+
+def test_sync_prints_gitignore_tip_when_missing(sample_repo: Path) -> None:
+    """Bootstrap UX: sample_repo has no .gitignore, so tip should fire."""
+    result = runner.invoke(app, ["sync", "--quiet"])
+    assert result.exit_code == 0
+    assert "add `.epitaxy/`" in result.output
+
+
+def test_sync_skips_tip_when_gitignore_lists_epitaxy(sample_repo: Path) -> None:
+    (sample_repo / ".gitignore").write_text(".epitaxy/\n")
+    result = runner.invoke(app, ["sync", "--quiet"])
+    assert result.exit_code == 0
+    assert "add `.epitaxy/`" not in result.output
+
+
+def test_version_flag(sample_repo: Path) -> None:
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0
+    assert "0.1.0a1" in result.output
