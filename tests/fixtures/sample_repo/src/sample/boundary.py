@@ -6,7 +6,7 @@ Tests in tests/parser/test_python.py assert zero edges originate from each.
 
 import json  # noqa: F401  module-qualified-use target below
 
-import src.sample.data as aliased  # noqa: F401  alias-import target below
+import sample.data as aliased  # noqa: F401  alias-import target below
 
 from os import path as os_path  # noqa: F401  alias on stdlib
 

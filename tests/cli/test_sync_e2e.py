@@ -97,3 +97,29 @@ def test_version_flag(sample_repo: Path) -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert "0.1.0a1" in result.output
+
+
+def test_sync_exits_3_when_a_file_fails_to_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per CLI.md §7: exit 3 = partial success (parse error, index still written).
+
+    Codex review Medium-4: previously SyntaxError was silently swallowed and
+    sync exited 0; downstream CI couldn't distinguish clean run from partial.
+    """
+    repo = tmp_path / "evil_repo"
+    (repo / "src" / "pkg").mkdir(parents=True)
+    (repo / "src" / "pkg" / "__init__.py").write_text("")
+    (repo / "src" / "pkg" / "ok.py").write_text("def good(): pass\n")
+    (repo / "src" / "pkg" / "bad.py").write_text("def broken(:  # syntax error\n")
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(app, ["sync"])
+
+    assert result.exit_code == 3, result.output
+    # Warning surfaces in stderr / output
+    assert "failed to parse" in result.output
+    assert "bad.py" in result.output
+    # Index still written with the good file
+    payload = json.loads((repo / ".epitaxy" / "index.json").read_text())
+    assert any(n["id"] == "module:src/pkg/ok.py" for n in payload["nodes"])

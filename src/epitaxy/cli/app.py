@@ -89,6 +89,34 @@ def _resolve_files(repo_root: Path, roots: list[str], excludes: list[str]) -> li
     return sorted(found - excluded)
 
 
+def _package_roots_from_globs(roots: list[str]) -> list[str]:
+    """Extract package-root prefixes from glob patterns.
+
+    `src/**/*.py` → `src/` (PEP src-layout: `src/foo/bar.py` imports as `foo.bar`)
+    `lib/**/*.py` → `lib/`
+    `**/*.py` → no prefix
+    `pkg/*.py` → `pkg/`
+
+    Without this, src-layout repos like Epitaxy itself produce zero
+    function-call edges because `from foo.bar import baz` doesn't resolve to
+    a node keyed under `src.foo.bar` (Codex review High-2).
+    """
+    prefixes: list[str] = []
+    glob_chars = ("*", "?", "[")
+    for pattern in roots:
+        first = len(pattern)
+        for c in glob_chars:
+            i = pattern.find(c)
+            if 0 <= i < first:
+                first = i
+        prefix = pattern[:first]
+        slash = prefix.rfind("/")
+        prefix = prefix[: slash + 1] if slash >= 0 else ""
+        if prefix:
+            prefixes.append(prefix)
+    return list(dict.fromkeys(prefixes))
+
+
 def _gitignore_lists_epitaxy(repo_root: Path) -> bool:
     g = repo_root / ".gitignore"
     if not g.exists():
@@ -139,14 +167,21 @@ def sync(
         config = config.model_copy(update={"roots": list(roots)})
 
     py_files = _resolve_files(repo_root, config.roots, config.excludes)
+    package_roots = _package_roots_from_globs(config.roots)
 
     if verbose:
         typer.echo(
-            f"parsing {len(py_files)} file(s) from roots={config.roots}",
+            f"parsing {len(py_files)} file(s) from roots={config.roots} "
+            f"(package_roots={package_roots})",
             err=True,
         )
 
-    nodes, edges = parse_repo(repo_root, py_files)
+    nodes, edges, parse_errors = parse_repo(
+        repo_root, py_files, package_roots=package_roots
+    )
+
+    for err in parse_errors:
+        typer.echo(f"warning: failed to parse {err.path}: {err.reason}", err=True)
 
     stats = IndexStats(
         modules=sum(1 for n in nodes if n.type == "module"),
@@ -180,6 +215,11 @@ def sync(
             f"({stats.modules} modules, {stats.functions} functions, {stats.edges} edges)",
             err=True,
         )
+
+    # CLI.md §7: exit 3 when one or more files failed to parse but a partial
+    # index was still written. Lets CI treat this as 'warn but proceed'.
+    if parse_errors:
+        raise typer.Exit(3)
 
 
 @app.command()

@@ -15,15 +15,32 @@ Function-call resolution heuristics — explicit boundaries locked by tests:
     - Module-qualified calls: `import x; x.foo()`
     - Dynamic dispatch / `getattr(...)()`
     - Calls to third-party / stdlib / unknown-type locals
+
+Call attribution is scoped to a function's own body — nested `def` / `async def`
+/ `lambda` bodies are NOT walked, so calls inside an inner function never
+pollute the outer function's edge list (Codex review High Med-3).
 """
 
 from __future__ import annotations
 
 import ast
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from ..store.models import Edge, FunctionNode, ModuleNode, Node
+
+
+@dataclass(frozen=True)
+class ParseError:
+    """One file that couldn't be AST-parsed; surfaced by `parse_repo`.
+
+    Per CLI.md §7 exit codes, presence of any ParseError → `epi sync` exits 3
+    after still writing a partial index with the successfully-parsed nodes.
+    """
+
+    path: Path
+    reason: str
 
 
 def module_id(rel_path: str) -> str:
@@ -34,9 +51,24 @@ def function_id(rel_path: str, qualname: str) -> str:
     return f"function:{rel_path}::{qualname}"
 
 
-def _module_dotted_name(rel_path: str) -> str:
-    """Convert `src/foo/bar.py` → `src.foo.bar`; `src/foo/__init__.py` → `src.foo`."""
+def _module_dotted_name(rel_path: str, package_roots: list[str]) -> str:
+    """Convert a repo-relative path to a Python dotted name.
+
+    `package_roots` are path prefixes (e.g. `["src/"]`) that get stripped
+    BEFORE conversion — matches PEP-conventional src-layout, where
+    `src/foo/bar.py` is imported as `foo.bar` (not `src.foo.bar`) after
+    `pip install -e .`. Without stripping, a real-world src-layout repo's
+    `from foo.bar import baz` imports would never resolve to a parsed node
+    (Codex review High-2).
+
+    `__init__.py` collapses: `src/foo/__init__.py` → `foo`.
+    """
     p = rel_path.replace("\\", "/")
+    for root in package_roots:
+        root_norm = root.rstrip("/") + "/"
+        if p.startswith(root_norm):
+            p = p[len(root_norm):]
+            break
     if p.endswith("/__init__.py"):
         p = p[: -len("/__init__.py")]
     elif p.endswith(".py"):
@@ -61,9 +93,11 @@ FuncDef = ast.FunctionDef | ast.AsyncFunctionDef
 
 
 def _walk_functions(tree: ast.Module) -> list[tuple[str, FuncDef, int]]:
-    """Return (qualname, def_node, line) for top-level funcs + class methods.
+    """Top-level functions + class methods (one level deep).
 
-    Nested functions (inside another function) are NOT included — PR1 boundary.
+    Nested functions (`def` inside another `def`) are NOT included — they are
+    not addressable through Epitaxy IDs in PR1, so a node for them would have
+    nowhere to be referenced from.
     """
     results: list[tuple[str, FuncDef, int]] = []
     for stmt in tree.body:
@@ -74,6 +108,30 @@ def _walk_functions(tree: ast.Module) -> list[tuple[str, FuncDef, int]]:
                 if isinstance(cls_stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     results.append((f"{stmt.name}.{cls_stmt.name}", cls_stmt, cls_stmt.lineno))
     return results
+
+
+def _calls_in_function_body(fdef: FuncDef):
+    """Yield Call nodes reachable from `fdef.body` WITHOUT descending into nested
+    function / lambda bodies.
+
+    Without this guard, `def outer(): def inner(): helper()` falsely attributes
+    `outer -> helper` because `ast.walk` recurses into `inner`'s body (Codex
+    review Medium-3).
+    """
+
+    def visit(node):
+        if isinstance(node, ast.Call):
+            yield node
+        # Skip nested function / lambda bodies — they are addressed (or not)
+        # independently by `_walk_functions`. ClassDef inside a function is
+        # rare but the same logic applies: methods belong to the inner class.
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            return
+        for child in ast.iter_child_nodes(node):
+            yield from visit(child)
+
+    for stmt in fdef.body:
+        yield from visit(stmt)
 
 
 def _resolve_call(
@@ -119,29 +177,42 @@ def parse_repo(
     repo_root: Path,
     py_files: list[Path],
     *,
+    package_roots: list[str] | None = None,
     extracted_at: datetime | None = None,
-) -> tuple[list[Node], list[Edge]]:
-    """Parse a set of Python files into intent-graph nodes + edges.
+) -> tuple[list[Node], list[Edge], list[ParseError]]:
+    """Parse a set of Python files into intent-graph nodes + edges + parse errors.
 
     `py_files` are absolute paths under `repo_root`. Glob expansion and exclude
     filtering are the caller's responsibility (CLI.md §5 `roots` / `excludes`).
-    Files that fail to AST-parse are skipped silently — caller (CLI) decides
-    whether to return exit code 3 for partial success.
+
+    `package_roots` are path prefixes (e.g. `["src/"]`) stripped before computing
+    dotted module names — required to honor PEP-conventional src-layout (see
+    `_module_dotted_name`). Defaults to no stripping if `None`.
+
+    Files that fail to AST-parse are skipped and surfaced in the returned
+    `list[ParseError]` so the CLI can exit 3 per CLI.md §7 (Codex review
+    Medium-4).
     """
     extracted_at = extracted_at or datetime.now(timezone.utc)
+    roots = list(package_roots or [])
 
     # Pass 1: parse every file, build dotted_name → rel_path map for import resolution
     parsed: list[tuple[str, str, ast.Module]] = []
     dotted_to_rel: dict[str, str] = {}
+    errors: list[ParseError] = []
 
     for abs_path in py_files:
         rel_path = str(abs_path.relative_to(repo_root)).replace("\\", "/")
         try:
             source = abs_path.read_text(encoding="utf-8")
             tree = ast.parse(source, filename=str(abs_path))
-        except (SyntaxError, UnicodeDecodeError):
+        except SyntaxError as e:
+            errors.append(ParseError(path=abs_path, reason=f"SyntaxError: {e}"))
             continue
-        dotted = _module_dotted_name(rel_path)
+        except UnicodeDecodeError as e:
+            errors.append(ParseError(path=abs_path, reason=f"UnicodeDecodeError: {e}"))
+            continue
+        dotted = _module_dotted_name(rel_path, roots)
         parsed.append((rel_path, dotted, tree))
         dotted_to_rel[dotted] = rel_path
 
@@ -230,9 +301,7 @@ def parse_repo(
 
         for qn, fdef in functions.items():
             from_id = function_id(rel_path, qn)
-            for child in ast.walk(fdef):
-                if not isinstance(child, ast.Call):
-                    continue
+            for child in _calls_in_function_body(fdef):
                 resolved = _resolve_call(
                     child,
                     current_qualname=qn,
@@ -266,4 +335,4 @@ def parse_repo(
                 )
                 seen_edges.add(edge_key)
 
-    return nodes, edges
+    return nodes, edges, errors
