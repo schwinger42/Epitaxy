@@ -246,26 +246,30 @@ All tools follow these rules:
 
 ## 6. Error codes
 
-JSON-RPC 2.0 standard (reused as-is):
+MCP distinguishes two error layers:
 
-| Code | Name |
-|---|---|
-| `-32700` | Parse error |
-| `-32600` | Invalid request |
-| `-32601` | Method not found |
-| `-32602` | Invalid params |
-| `-32603` | Internal error |
+**Protocol-level errors** — JSON-RPC 2.0 error envelope. Fires for malformed requests, missing methods, or input that fails the tool's pydantic schema. MCP clients receive these as standard JSON-RPC `error` objects.
 
-Epitaxy-specific (server-defined range per [JSON-RPC spec](https://www.jsonrpc.org/specification#error_object)):
-
-| Code | Name | Tool(s) |
+| Code | Name | When |
 |---|---|---|
-| `-32001` | `NodeNotFound` | all |
-| `-32002` | `ParameterParsingDisabled` | `por_trace` |
-| `-32003` | `NotAParameter` | `por_trace` |
-| `-32004` | `AssetTypeNotSupportedInV0` | `por_lineage` |
+| `-32700` | Parse error | Malformed JSON-RPC payload |
+| `-32600` | Invalid request | Missing `jsonrpc`/`method`/`id` fields |
+| `-32601` | Method not found | Unknown tool name |
+| `-32602` | Invalid params | Input doesn't match tool's input schema (e.g. `node_id` not a string) |
+| `-32603` | Internal error | Server bug / unexpected exception |
+
+**Tool-level errors** — per MCP spec, surface as `CallToolResult` with `isError: true` and a `TextContent` describing the failure. They are NOT delivered through the JSON-RPC `error` envelope. Because MCP clients only see the text content (not a structured code field), Epitaxy prefixes every tool-error message with a machine-readable `[code:-XXXX]` token so clients can dispatch on category without parsing free-form text.
+
+| Code | Name | Tool(s) | Surfaces as |
+|---|---|---|---|
+| `-32001` | `NodeNotFound` | all | `[code:-32001] node 'X' not found in index` |
+| `-32002` | `ParameterParsingDisabled` | `por_trace` | `[code:-32002] index has no parameter nodes. Re-run \`epi sync --parameters\`…` |
+| `-32003` | `NotAParameter` | `por_trace` | `[code:-32003] node 'X' is type 'Y', not 'parameter'` |
+| `-32004` | `AssetTypeNotSupportedInV0` | `por_lineage` | `[code:-32004] data_asset nodes are deferred to v1+; see SCHEMA §2.6` |
 
 Range `-32005` through `-32099` reserved for v1+ tools.
+
+**Client implementation note**: to extract the code, match `^\[code:(-?\d+)\]` against `result.content[0].text` when `result.isError` is true.
 
 ## 7. Implementation notes
 

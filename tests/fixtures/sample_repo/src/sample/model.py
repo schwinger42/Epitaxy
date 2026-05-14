@@ -1,0 +1,41 @@
+"""Sample model that depends on data — exercises all 3 supported call shapes.
+
+Uses PEP-conventional src-layout imports (`from sample.data import load`,
+NOT `from src.sample.data import load`) — the natural form after
+`pip install -e .` on a src-layout repo. The parser strips the `src/`
+package-root prefix when computing dotted module names (parser/python.py
+`_module_dotted_name`).
+"""
+
+from sample.data import load
+
+
+class M:
+    def fit(self):
+        """Calls `load()` (imported-name) and `self.cleanup()` (self-method)."""
+        rows = load()
+        self.cleanup()
+        return rows
+
+    def cleanup(self):
+        pass
+
+
+def top_level():
+    """Calls `helper()` (same-module direct call)."""
+    return helper()
+
+
+def helper():
+    return 42
+
+
+def outer_with_nested_inner():
+    """Nested-function attribution boundary: inner() calling helper() must
+    NOT emit an edge from outer_with_nested_inner -> helper. See parser
+    `_calls_in_function_body`. Codex review Medium-3 locks this."""
+
+    def inner():
+        return helper()  # this call belongs to inner, not outer
+
+    return inner

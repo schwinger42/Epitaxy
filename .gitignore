@@ -10,6 +10,9 @@ dist/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # IDE
 .idea/
@@ -20,7 +23,8 @@ dist/
 .agent/
 
 # Project
-.epitaxy/        # generated POR data when dogfooding
+# generated POR data when dogfooding (.epitaxy/ contains index.json etc.)
+.epitaxy/
 *.log
 .env
 .DS_Store
