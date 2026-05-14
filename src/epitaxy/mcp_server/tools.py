@@ -26,19 +26,33 @@ from mcp.types import ErrorData
 from epitaxy.store import Index, read_index
 
 
-# Epitaxy-specific JSON-RPC error codes per docs/MCP.md §6
+# Epitaxy-specific error codes per docs/MCP.md §6.
+#
+# MCP semantics: tool errors surface to clients as
+# `CallToolResult { isError: true, content: [TextContent(...)] }` — they are
+# NOT JSON-RPC error envelopes (that route is reserved for protocol-level
+# failures like invalid params shape). So clients see the `message` text, not
+# the `code` int directly. To preserve machine-readable dispatch, we prefix
+# the message with `[code:-XXXX]` (see `_make_error`). Codex review Medium-1.
 ERR_NODE_NOT_FOUND = -32001
 ERR_PARAMETER_PARSING_DISABLED = -32002
 ERR_NOT_A_PARAMETER = -32003
 ERR_ASSET_TYPE_NOT_SUPPORTED_IN_V0 = -32004
 
 
+def _make_error(code: int, message: str) -> McpError:
+    """Build an McpError whose message text carries the code as a
+    machine-readable prefix, so MCP clients can dispatch on specific Epitaxy
+    error categories without parsing free-form text."""
+    return McpError(ErrorData(code=code, message=f"[code:{code}] {message}"))
+
+
 def por_explain_impl(index: Index, node_id: str) -> dict[str, Any]:
     """Plain-function implementation; see docs/MCP.md §2 for return shape."""
     node = next((n for n in index.nodes if n.id == node_id), None)
     if node is None:
-        raise McpError(
-            ErrorData(code=ERR_NODE_NOT_FOUND, message=f"node {node_id!r} not found in index")
+        raise _make_error(
+            ERR_NODE_NOT_FOUND, f"node {node_id!r} not found in index"
         )
 
     incident_edges = [e for e in index.edges if e.from_ == node_id or e.to == node_id]
@@ -63,30 +77,22 @@ def por_trace_impl(index: Index, parameter_id: str) -> dict[str, Any]:
     """Decision trail for a tuned parameter. See docs/MCP.md §3."""
     has_parameters = any(n.type == "parameter" for n in index.nodes)
     if not has_parameters:
-        raise McpError(
-            ErrorData(
-                code=ERR_PARAMETER_PARSING_DISABLED,
-                message=(
-                    "index has no parameter nodes. "
-                    "Re-run `epi sync --parameters` to enable. "
-                    "(PR1 tracer-bullet build does not implement parameter "
-                    "extraction; tracking in PR4.)"
-                ),
-            )
+        raise _make_error(
+            ERR_PARAMETER_PARSING_DISABLED,
+            "index has no parameter nodes. "
+            "Re-run `epi sync --parameters` to enable. "
+            "(PR1 tracer-bullet build does not implement parameter "
+            "extraction; tracking in PR4.)",
         )
 
     # Forward-compat shape — unreachable in PR1.
     node = next((n for n in index.nodes if n.id == parameter_id), None)
     if node is None:
-        raise McpError(
-            ErrorData(code=ERR_NODE_NOT_FOUND, message=f"node {parameter_id!r} not found")
-        )
+        raise _make_error(ERR_NODE_NOT_FOUND, f"node {parameter_id!r} not found")
     if node.type != "parameter":
-        raise McpError(
-            ErrorData(
-                code=ERR_NOT_A_PARAMETER,
-                message=f"node {parameter_id!r} is type {node.type!r}, not 'parameter'",
-            )
+        raise _make_error(
+            ERR_NOT_A_PARAMETER,
+            f"node {parameter_id!r} is type {node.type!r}, not 'parameter'",
         )
     raise McpError(
         ErrorData(code=-32603, message="por_trace body not implemented in PR1 (tracking in PR4)")
@@ -96,14 +102,10 @@ def por_trace_impl(index: Index, parameter_id: str) -> dict[str, Any]:
 def por_lineage_impl(index: Index, asset_id: str) -> dict[str, Any]:
     """Documented stub in v0 — always errors. See docs/MCP.md §4."""
     _ = index, asset_id  # signature parity with future impl
-    raise McpError(
-        ErrorData(
-            code=ERR_ASSET_TYPE_NOT_SUPPORTED_IN_V0,
-            message=(
-                "data_asset nodes are deferred to v1+; see SCHEMA §2.6. "
-                "This tool is reserved in the v0 surface for forward compatibility."
-            ),
-        )
+    raise _make_error(
+        ERR_ASSET_TYPE_NOT_SUPPORTED_IN_V0,
+        "data_asset nodes are deferred to v1+; see SCHEMA §2.6. "
+        "This tool is reserved in the v0 surface for forward compatibility.",
     )
 
 

@@ -74,6 +74,9 @@ def test_por_explain_raises_node_not_found_for_unknown_id():
     with pytest.raises(McpError) as excinfo:
         por_explain_impl(_tiny_index(), "module:does-not-exist.py")
     assert excinfo.value.error.code == ERR_NODE_NOT_FOUND
+    # Codex review Medium-1: machine-readable code prefix lets clients
+    # dispatch even though MCP wire format only surfaces text content.
+    assert "[code:-32001]" in excinfo.value.error.message
 
 
 def test_por_trace_raises_parameter_parsing_disabled_when_no_parameters():
@@ -139,6 +142,9 @@ def test_mcp_server_por_explain_reports_node_not_found(synced_index: Path) -> No
     # Error message surfaces through the tool result's text content.
     text = result.content[0].text  # type: ignore[attr-defined]
     assert "not found" in text.lower()
+    # Machine-readable code prefix per MCP.md §6 — lets clients dispatch
+    # without parsing free-form text. Codex review Medium-1.
+    assert "[code:-32001]" in text
 
 
 def test_mcp_server_por_trace_reports_parameter_parsing_disabled(
@@ -151,6 +157,7 @@ def test_mcp_server_por_trace_reports_parameter_parsing_disabled(
     assert result.isError
     text = result.content[0].text  # type: ignore[attr-defined]
     assert "epi sync --parameters" in text
+    assert "[code:-32002]" in text
 
 
 def test_mcp_server_por_lineage_reports_v0_stub(synced_index: Path) -> None:
@@ -161,6 +168,7 @@ def test_mcp_server_por_lineage_reports_v0_stub(synced_index: Path) -> None:
     assert result.isError
     text = result.content[0].text  # type: ignore[attr-defined]
     assert "v1+" in text
+    assert "[code:-32004]" in text
 
 
 # --------------------------------------------------------------------------- #
