@@ -108,7 +108,7 @@ This is the same single-source-of-truth + materialized-views pattern that `dbt`,
 
 3. **What Pillar 3's three navigation axes are**. Horizontal / vertical / cross-cutting aren't three UI gimmicks — they are three orthogonal ways to slice the same graph for a human reader (peer comparison, depth drill-down, cross-cutting traversal).
 
-**Implementation consequence for v0**: the data layer in `.epitaxy/index.json` must be graph-shaped from day one, even though v0 only ships one projection (the Pillar-3 drill-down site) and one read interface (Pillar-4 MCP tools). If v0 ships a flat document store, every later pillar pays for the mistake.
+**Implementation consequence for v0**: the data layer in `.epitaxy/index.json` must be graph-shaped from day one, even though v0 only ships one projection (the Pillar-3 drill-down site) and one read interface (Pillar-4 MCP tools). If v0 ships a flat document store, every later pillar pays for the mistake. See [docs/SCHEMA.md](SCHEMA.md) for the concrete spec — 7 node types, 4 edge types, parameter extraction opt-in, generic ML worked example.
 
 ## 3. Phasing v0 → v3
 
