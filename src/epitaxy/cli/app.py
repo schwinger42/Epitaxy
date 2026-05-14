@@ -182,5 +182,60 @@ def sync(
         )
 
 
+mcp_app = typer.Typer(
+    no_args_is_help=True,
+    help="Pillar-4 MCP server commands.",
+)
+app.add_typer(mcp_app, name="mcp")
+
+
+@mcp_app.command("serve")
+def mcp_serve(
+    transport: str = typer.Option(
+        "stdio",
+        "--transport",
+        help="Transport: 'stdio' (default) or 'http' (not implemented in PR1 — fails fast).",
+    ),
+    port: int = typer.Option(  # noqa: ARG001  (reserved for PR2 http transport)
+        7321,
+        "--port",
+        help="Port for http transport (PR2 only).",
+    ),
+    index: Optional[Path] = typer.Option(
+        None,
+        "--index",
+        help="Path to .epitaxy/index.json (default: cwd/.epitaxy/index.json).",
+    ),
+) -> None:
+    """Start the Pillar-4 MCP server (3 tools: por_explain / por_trace / por_lineage)."""
+    _ = port  # reserved for PR2 http transport; flag accepted for forward-compat help text
+    if transport == "http":
+        typer.echo(
+            "error: --transport http is not implemented in this build "
+            "(PR1 tracer-bullet). Tracking in PR2.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    if transport != "stdio":
+        typer.echo(
+            f"error: unknown --transport value {transport!r}. Expected 'stdio' or 'http'.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    index_path = index if index else (Path.cwd() / ".epitaxy" / "index.json")
+    if not index_path.exists():
+        typer.echo(
+            f"error: index not found at {index_path}. Run `epi sync` first.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    from epitaxy.mcp_server import build_server
+
+    server = build_server(index_path)
+    server.run(transport="stdio")
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()
