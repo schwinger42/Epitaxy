@@ -1,0 +1,1 @@
+# Sample package for Epitaxy parser tests — see tests/parser/test_python.py.
