@@ -99,6 +99,51 @@ def test_version_flag(sample_repo: Path) -> None:
     assert "0.1.0a1" in result.output
 
 
+def test_sync_parameters_enabled_in_config_also_fails_fast(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`[tool.epitaxy] parameters_enabled = true` must trip the same fail-fast
+    as the `--parameters` CLI flag — otherwise the silent no-op bug returns
+    through config instead of through the flag (Codex review High-1)."""
+    repo = tmp_path / "repo"
+    shutil.copytree(FIXTURE, repo)
+    (repo / "pyproject.toml").write_text(
+        "[tool.epitaxy]\n"
+        'roots = ["src/**/*.py"]\n'
+        "parameters_enabled = true\n"
+    )
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(app, ["sync"])
+
+    assert result.exit_code == 2, result.output
+    assert "parameter extraction is not implemented" in result.output
+
+
+def test_sync_honors_output_config_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`[tool.epitaxy] output = "..."` overrides the default `.epitaxy/index.json`.
+
+    Codex review Medium-5: this key was documented in CLI.md §5 but missing
+    from IndexConfig — `extra="forbid"` rejected it as a config error.
+    """
+    repo = tmp_path / "repo"
+    shutil.copytree(FIXTURE, repo)
+    (repo / "pyproject.toml").write_text(
+        "[tool.epitaxy]\n"
+        'roots = ["src/**/*.py"]\n'
+        'output = "custom/idx.json"\n'
+    )
+    monkeypatch.chdir(repo)
+
+    result = runner.invoke(app, ["sync", "--quiet"])
+
+    assert result.exit_code == 0, result.output
+    assert (repo / "custom" / "idx.json").exists()
+    assert not (repo / ".epitaxy" / "index.json").exists()
+
+
 def test_sync_exits_3_when_a_file_fails_to_parse(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

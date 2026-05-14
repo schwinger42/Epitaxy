@@ -149,14 +149,6 @@ def sync(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Errors only."),
 ) -> None:
     """Parse the repo and write `.epitaxy/index.json`."""
-    if parameters:
-        typer.echo(
-            "error: --parameters is not implemented in this build "
-            "(PR1 tracer-bullet). Tracking in PR4.",
-            err=True,
-        )
-        raise typer.Exit(2)
-
     if verbose and quiet:
         typer.echo("error: --verbose and --quiet are mutually exclusive.", err=True)
         raise typer.Exit(2)
@@ -165,6 +157,20 @@ def sync(
     config = _load_config(repo_root)
     if roots:
         config = config.model_copy(update={"roots": list(roots)})
+    if parameters:
+        config = config.model_copy(update={"parameters_enabled": True})
+
+    # Fail-fast AFTER config + CLI flag merge — both `--parameters` AND
+    # `[tool.epitaxy] parameters_enabled = true` route to the same effective
+    # value and must trip the same error. Codex review High-1 caught that
+    # checking only the CLI flag reintroduces silent no-op through config.
+    if config.parameters_enabled:
+        typer.echo(
+            "error: parameter extraction is not implemented in this build "
+            "(PR1 tracer-bullet). Tracking in PR4.",
+            err=True,
+        )
+        raise typer.Exit(2)
 
     py_files = _resolve_files(repo_root, config.roots, config.excludes)
     package_roots = _package_roots_from_globs(config.roots)
@@ -199,7 +205,12 @@ def sync(
         edges=edges,
     )
 
-    out_path = output if output else (repo_root / ".epitaxy" / "index.json")
+    # Precedence per CLI.md §6: CLI flag > [tool.epitaxy].output > built-in default
+    if output is not None:
+        out_path = output
+    else:
+        configured = Path(config.output)
+        out_path = configured if configured.is_absolute() else (repo_root / configured)
     write_index(index, out_path)
 
     if not _gitignore_lists_epitaxy(repo_root):

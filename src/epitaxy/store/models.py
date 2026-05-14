@@ -64,7 +64,12 @@ class Edge(BaseModel):
 
 
 class IndexConfig(BaseModel):
-    """The [tool.epitaxy] config captured at sync time (provenance trail)."""
+    """The [tool.epitaxy] config captured at sync time (provenance trail).
+
+    All keys defined here match docs/CLI.md §5. Codex review Medium-5: previously
+    `output` was documented in CLI.md but missing here, so a real user's
+    `[tool.epitaxy] output = "..."` would be rejected by `extra="forbid"`.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -72,6 +77,7 @@ class IndexConfig(BaseModel):
     adr_dir: str = "decisions/"
     plan_dir: str = "docs/plans/"
     parameters_enabled: bool = False
+    output: str = ".epitaxy/index.json"
     excludes: list[str] = Field(
         default_factory=lambda: ["**/test_*.py", "**/conftest.py"]
     )
