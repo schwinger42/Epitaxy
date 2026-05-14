@@ -43,17 +43,6 @@ Detail: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 4. **README must match shipped reality.** Anti-pattern: promising v2/v3 always-on dev infrastructure in README when current code can't deliver it. Forward-looking framing lives in `docs/ROADMAP.md`, never in README. Two-layer narrative: README front door = honest scope; ROADMAP back door = depth.
 
-5. **Dual git identity must verify before every commit.** Global `~/.gitconfig` defaults to work identity. This repo uses `includeIf` + SSH alias (`github.com-personal`) to switch to personal identity. Run the 4-check before committing:
-
-```bash
-git config user.email           # must be 90270661+schwinger42@users.noreply.github.com
-git config user.name            # must be "Baron Wang"
-git remote -v                   # URL must contain github.com-personal
-ssh -T git@github.com-personal  # must return "Hi schwinger42!"
-```
-
-Any one wrong → STOP and fix. A leaked work-email commit on public history is hard to clean.
-
 ## Current focus
 
 Waiting on RecSys Phase 2 (fresh_min_tier Round 3 + Statsig 3-arm A/B launch) to ship. When that lands (~early June 2026), return here for v0 implementation: Pillar 3 (Consume) + Pillar 4 (Query), read-only on user repo, ~3-5 focused days.
