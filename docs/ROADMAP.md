@@ -83,6 +83,33 @@ Tools exposed to any AI agent (Claude Code, Codex, Cursor, future agents):
 
 **Why bundled with Pillar 3 in v0**: same JSON data layer powers both. Marginal cost of Pillar 4 once Pillar 3 exists is 1-2 days.
 
+### Intent graph as primary, code/docs as projection
+
+Beneath the 4 pillars sits a single mental model that makes them composable: **the intent graph is the truth, and every visible artifact in the repo is a projection of it**.
+
+Concretely, "intent graph" means typed nodes (modules, functions, ADRs, parameters, data assets, decisions, plans) connected by typed edges (`decides`, `depends-on`, `derives-from`, `modifies`, `supersedes`). The graph lives in `.epitaxy/index.json` from v0 onward, and grows new node/edge types as later pillars come online.
+
+Every surface that humans or agents actually read is then a **projection** of this graph:
+
+| Projection | Surface | Where it lives |
+|---|---|---|
+| Executable | Python source | `src/**/*.py` |
+| Decision | ADRs | `decisions/*.md` |
+| Narrative | nested `CLAUDE.md` | per-subsystem |
+| Temporal | commit log | `git log` |
+| Onboarding | role playbooks | `docs/playbooks/*.md` |
+| Pedagogical (v2/v3) | HTML explainers | `epi serve` output |
+
+This is the same single-source-of-truth + materialized-views pattern that `dbt`, event sourcing, and `terraform plan/apply` all run on. It earns its place in the architecture because it makes three otherwise-fuzzy things sharp:
+
+1. **What drift actually is** (Pillar 2b). Not "the docs are out of date" — drift is **projection desync**: two projections of the same graph node disagree. `models/CLAUDE.md` says `rank=64`, `models/als.py` says `rank=128`: same graph node (`als.rank`), two projections, conflicting values. Detection becomes a concrete equality check, not a fuzzy "feels stale" judgment.
+
+2. **What sacred-vs-safe means** (§6). Sacred ops **mutate the graph itself** (new ADR node, deleted module node, changed root rule edge). Safe ops **re-render one projection from the graph** (cross-ref rename, `<!-- epitaxy-auto -->` block refresh). The classification table in §6 is a downstream consequence of this distinction, not an independent ruleset.
+
+3. **What Pillar 3's three navigation axes are**. Horizontal / vertical / cross-cutting aren't three UI gimmicks — they are three orthogonal ways to slice the same graph for a human reader (peer comparison, depth drill-down, cross-cutting traversal).
+
+**Implementation consequence for v0**: the data layer in `.epitaxy/index.json` must be graph-shaped from day one, even though v0 only ships one projection (the Pillar-3 drill-down site) and one read interface (Pillar-4 MCP tools). If v0 ships a flat document store, every later pillar pays for the mistake.
+
 ## 3. Phasing v0 → v3
 
 | Phase | Pillars added | Effort | What ships |
