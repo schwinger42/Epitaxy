@@ -49,5 +49,30 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/epitaxy"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+filterwarnings = [
+    "error",
+    # mcp / starlette emit a few harmless DeprecationWarnings on Py3.13; keep noise low
+    "ignore::DeprecationWarning:websockets.*",
+    "ignore::DeprecationWarning:starlette.*",
+]
+
+[tool.coverage.run]
+source = ["src/epitaxy"]
+branch = true
+omit = [
+    "src/epitaxy/__init__.py",  # only re-exports version
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+show_missing = true
+
 # pyyaml (POR docstring frontmatter parsing) will be added alongside
 # ADR / plan markdown parsing in PR2 — not used by PR1 tracer-bullet scope.
