@@ -53,6 +53,184 @@ from epitaxy.store.models import (
 # --------------------------------------------------------------------------- #
 
 
+_CSS = """
+:root {
+  --fg: #1a1a1a;
+  --bg: #ffffff;
+  --muted: #666;
+  --accent: #0066cc;
+  --accent-bg: #fff8d0;
+  --code-bg: #f4f4f4;
+  --border: #d0d0d0;
+  --badge-accepted-bg: #d4edda;
+  --badge-accepted-fg: #155724;
+  --badge-superseded-bg: #f8d7da;
+  --badge-superseded-fg: #721c24;
+  --badge-proposed-bg: #fff3cd;
+  --badge-proposed-fg: #856404;
+  --badge-in-progress-bg: #d1ecf1;
+  --badge-in-progress-fg: #0c5460;
+  --missing-fg: #999;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e8e8e8;
+    --bg: #1a1a1a;
+    --muted: #999;
+    --accent: #6bb6ff;
+    --accent-bg: #3a3a1a;
+    --code-bg: #2a2a2a;
+    --border: #3a3a3a;
+    --badge-accepted-bg: #1d3a26;
+    --badge-accepted-fg: #8be4a8;
+    --badge-superseded-bg: #3a1d22;
+    --badge-superseded-fg: #f08594;
+    --badge-proposed-bg: #3a331a;
+    --badge-proposed-fg: #f0d77a;
+    --badge-in-progress-bg: #1d343a;
+    --badge-in-progress-fg: #8bd0f0;
+    --missing-fg: #777;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+  margin: 0;
+}
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+header h1 { margin-top: 0; }
+header p { color: var(--muted); margin: 0.3rem 0; }
+nav {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 0;
+  margin-bottom: 1rem;
+  z-index: 10;
+}
+nav h2 { display: inline; margin: 0 0.5rem 0 0; font-size: 1rem; }
+nav ul { display: inline; list-style: none; padding: 0; margin: 0; }
+nav li { display: inline; margin-right: 1rem; }
+nav a { color: var(--accent); text-decoration: none; }
+nav a:hover { text-decoration: underline; }
+section { margin: 2rem 0; }
+section > h2 {
+  border-bottom: 2px solid var(--border);
+  padding-bottom: 0.3rem;
+}
+details {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg);
+}
+details > summary {
+  cursor: pointer;
+  font-weight: 500;
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before {
+  content: "\\25B8";
+  display: inline-block;
+  width: 1em;
+  color: var(--muted);
+  transition: transform 0.1s;
+}
+details[open] > summary::before { content: "\\25BE"; }
+details > .module-detail,
+details > .adr-detail,
+details > .plan-detail {
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+:target {
+  background: var(--accent-bg);
+  scroll-margin-top: 4rem;
+}
+summary .path { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+.status {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: var(--badge-proposed-bg);
+  color: var(--badge-proposed-fg);
+}
+.status[data-status="accepted"] {
+  background: var(--badge-accepted-bg); color: var(--badge-accepted-fg);
+}
+.status[data-status="superseded"] {
+  background: var(--badge-superseded-bg); color: var(--badge-superseded-fg);
+}
+.status[data-status="in-progress"] {
+  background: var(--badge-in-progress-bg); color: var(--badge-in-progress-fg);
+}
+code, .path {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.92em;
+}
+code { background: var(--code-bg); padding: 0.05em 0.3em; border-radius: 3px; }
+dl.por dt, dl.frontmatter dt {
+  font-weight: 600;
+  color: var(--muted);
+  margin-top: 0.4rem;
+}
+dl.por dd, dl.frontmatter dd { margin-left: 1.2rem; margin-bottom: 0.2rem; }
+dl.functions > dt {
+  margin-top: 0.6rem;
+  padding-top: 0.4rem;
+  border-top: 1px dashed var(--border);
+}
+dl.functions > dd { margin-left: 1rem; }
+ul { padding-left: 1.4rem; }
+.doc { font-style: italic; color: var(--muted); margin: 0.3rem 0; }
+.summary { margin: 0.5rem 0; }
+.missing-target {
+  color: var(--missing-fg);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.92em;
+}
+.missing-target em { font-style: normal; font-size: 0.85em; opacity: 0.7; }
+h3, h4 { margin: 0.8rem 0 0.3rem; }
+h4 { font-size: 0.95rem; color: var(--muted); }
+@media (max-width: 720px) {
+  main { padding: 1rem; }
+  nav { position: static; }
+}
+"""
+
+# The single JS island per ROADMAP §4: CSS :target cannot drive details[open],
+# so without this the drill-down primitive is broken on URL-anchor navigation.
+# Listens for BOTH DOMContentLoaded and hashchange (Codex round-2 Med-3 — the
+# latter handles in-page link clicks that fire after initial load).
+_OPEN_HASH_JS = """
+function openHashTarget() {
+  var hash = location.hash;
+  if (!hash || hash.length < 2) return;
+  var el = document.getElementById(hash.slice(1));
+  if (el && el.tagName === 'DETAILS') el.open = true;
+}
+document.addEventListener('DOMContentLoaded', openHashTarget);
+window.addEventListener('hashchange', openHashTarget);
+"""
+
+
 def _esc(text: str | None) -> str:
     return html_lib.escape(text or "")
 
@@ -398,7 +576,7 @@ def render_index(index: Index) -> str:
     parts.append('<meta charset="utf-8">')
     parts.append('<meta name="viewport" content="width=device-width, initial-scale=1">')
     parts.append("<title>Epitaxy index</title>")
-    # CSS + JS island land in commit 5.
+    parts.append(f"<style>{_CSS}</style>")
     parts.append("</head><body><main>")
     parts.append(_render_header(index, counts))
     parts.append(_render_nav(counts))
@@ -442,7 +620,9 @@ def render_index(index: Index) -> str:
             )
         parts.append("</section>")
 
-    parts.append("</main></body></html>")
+    parts.append("</main>")
+    parts.append(f"<script>{_OPEN_HASH_JS}</script>")
+    parts.append("</body></html>")
     return "\n".join(parts)
 
 
