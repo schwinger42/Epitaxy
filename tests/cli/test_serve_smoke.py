@@ -77,8 +77,12 @@ def test_render_escapes_html_in_docstrings(tmp_path: Path) -> None:
         result = runner.invoke(app, ["sync", "--quiet"])
         assert result.exit_code == 0
         html = render_index(read_index(repo / ".epitaxy" / "index.json"))
-        assert "<script>" not in html
-        assert "&lt;script&gt;" in html
+        # The docstring's malicious <script>alert(1)</script> must stay escaped;
+        # the legitimate <script> tag wrapping the auto-open JS island added in
+        # PR3 C5 is fine. Check for the specific malicious payload, not a bare
+        # <script> substring.
+        assert "<script>alert(1)</script>" not in html
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
     finally:
         monkeypatch.undo()
 

@@ -37,7 +37,7 @@ Conventions across all subcommands:
 
 - `--help` is supported on every subcommand.
 - `--version` is top-level only; prints the version from `pyproject.toml [project].version` at install time.
-- Every subcommand respects `--verbose / -v` and `--quiet / -q` for log level (default: human-friendly summary on stderr). The two flags are mutually exclusive.
+- `epi sync` and `epi serve` accept `--verbose / -v` and `--quiet / -q` for log level (default: human-friendly summary on stderr). The two flags are mutually exclusive. `epi mcp serve` does NOT carry these flags — stdio MCP is silent by contract, and HTTP transport logs via uvicorn / FastMCP, not the Epitaxy CLI.
 
 ## 2. `epi sync` — generate the intent index
 
@@ -108,16 +108,21 @@ $ epi mcp serve [OPTIONS]
 
 | Flag | Type | Default | Notes |
 |---|---|---|---|
-| `--transport stdio\|http` | choice | `stdio` | v0 ships stdio only. `--transport http` is reserved for PR3 — fails-fast with exit 2 in v0 (see [MCP.md §7](MCP.md#7-implementation-notes)). |
-| `--port INT` | int | `7321` | Only meaningful with `--transport http`. Arbitrary high port; no MCP-standard HTTP port exists. |
+| `--transport stdio\|http` | choice | `stdio` | `stdio` for local AI-agent integration (Claude Code / Codex / Cursor). `http` uses [MCP streamable-http](https://modelcontextprotocol.io/specification) for remote-host or multi-client scenarios. |
+| `--host STR` | string | `127.0.0.1` | Bind host for `--transport http`. Loopback only by default — pass `0.0.0.0` for LAN exposure (emits an unauthenticated-exposure warning). Ignored when `--transport stdio`. |
+| `--port INT` | int | `7321` | Bind port for `--transport http`. Arbitrary high port; no MCP-standard HTTP port exists. Ignored when `--transport stdio`. |
+| `--allowed-origins STR` | string | (auto) | Comma-separated `Origin` allowlist for HTTP DNS-rebinding protection. Default auto-derives from `--host` + `--port` (loopback variants when host is `127.0.0.1`). Pass `""` to disable protection — NOT recommended; emits a stderr warning. |
+| `--allowed-hosts STR` | string | (auto) | Comma-separated `Host`-header allowlist for HTTP DNS-rebinding protection. Default auto-derives from `--host` + `--port` (loopback variants when host is `127.0.0.1`). Required for LAN exposure with `--host 0.0.0.0` since real clients send `Host: <their-ip>:<port>`, not `Host: 0.0.0.0:<port>`; without it MCP middleware returns HTTP 421. |
 | `--index PATH` | string | `.epitaxy/index.json` | Path to the index. |
-| `--verbose / -v` / `--quiet / -q` | bool | `false` | Same conventions. |
 
 ### Behavior contract
 
 - **Read-only.** v0 MCP tools never mutate the index or any repo file. Pillar 2a (in-session writes via MCP `prompts/`) lands in v1.
 - **Fails fast if `--index` missing.** Exit code 2.
 - **No long-lived state.** Each tool call re-reads `index.json` (sub-millisecond for v0 repo sizes). Caching is reserved for v2+ if real-world measurement justifies it.
+- **HTTP transport: DNS-rebinding protection ON by default.** Per [MCP Streamable HTTP spec](https://modelcontextprotocol.io/specification), the server validates `Origin` and `Host` headers against the allowlist; invalid origins get HTTP 403. Disabling protection requires the explicit `--allowed-origins ""` opt-out and emits a stderr warning.
+- **HTTP transport: errno-specific bind failures.** Port-in-use → exit 2 with port hint; permission-denied → exit 2 with "ports <1024 need root" hint; bad host → exit 2 with bind-address hint. Unknown `OSError` surfaces as-is (not masked as port-in-use).
+- **HTTP transport: no auth, no TLS in v0.** Read-only doesn't mean low-sensitivity — the non-loopback warning enumerates the exposed surface (file paths, signatures, POR blocks, ADR/plan summaries, edges, provenance) so users can course-correct before leaking corporate intent metadata.
 
 ## 5. `pyproject.toml [tool.epitaxy]` config schema
 

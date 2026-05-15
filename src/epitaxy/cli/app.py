@@ -316,12 +316,39 @@ def mcp_serve(
     transport: str = typer.Option(
         "stdio",
         "--transport",
-        help="Transport: 'stdio' (default) or 'http' (reserved for PR3 — fails fast in v0).",
+        help="Transport: 'stdio' (default) or 'http' (MCP streamable-http per spec).",
     ),
-    port: int = typer.Option(  # noqa: ARG001  (reserved for PR3 http transport)
+    port: int = typer.Option(
         7321,
         "--port",
-        help="Port for http transport (PR3 only).",
+        help="Bind port for HTTP transport. Ignored when --transport stdio.",
+    ),
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help=(
+            "Bind host for HTTP transport. Default 127.0.0.1 (loopback only). "
+            "Pass 0.0.0.0 for LAN exposure — emits an unauthenticated-exposure warning."
+        ),
+    ),
+    allowed_origins: Optional[str] = typer.Option(
+        None,
+        "--allowed-origins",
+        help=(
+            "Comma-separated Origin allowlist for HTTP transport (DNS-rebinding "
+            "protection per MCP spec). Default: auto-derive from --host and --port. "
+            "Pass empty string ('') to disable protection — NOT recommended."
+        ),
+    ),
+    allowed_hosts: Optional[str] = typer.Option(
+        None,
+        "--allowed-hosts",
+        help=(
+            "Comma-separated Host header allowlist for HTTP transport. Default: "
+            "auto-derive from --host + --port (loopback variants when --host is "
+            "127.0.0.1). Pass `host1:port1,host2:port2` for LAN exposure scenarios "
+            "where clients send a different Host than the bind address."
+        ),
     ),
     index: Optional[Path] = typer.Option(
         None,
@@ -330,15 +357,7 @@ def mcp_serve(
     ),
 ) -> None:
     """Start the Pillar-4 MCP server (3 tools: por_explain / por_trace / por_lineage)."""
-    _ = port  # reserved for PR3 http transport; flag accepted for forward-compat help text
-    if transport == "http":
-        typer.echo(
-            "error: --transport http is reserved for PR3 and not implemented in v0 "
-            "(see docs/MCP.md §7). Use --transport stdio (the default).",
-            err=True,
-        )
-        raise typer.Exit(2)
-    if transport != "stdio":
+    if transport not in ("stdio", "http"):
         typer.echo(
             f"error: unknown --transport value {transport!r}. Expected 'stdio' or 'http'.",
             err=True,
@@ -356,7 +375,222 @@ def mcp_serve(
     from epitaxy.mcp_server import build_server
 
     server = build_server(index_path)
-    server.run(transport="stdio")
+
+    if transport == "stdio":
+        server.run(transport="stdio")
+        return
+
+    _run_http_transport(
+        server,
+        host=host,
+        port=port,
+        allowed_origins_arg=allowed_origins,
+        allowed_hosts_arg=allowed_hosts,
+    )
+
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _host_to_url_authority(host: str, port: int) -> str:
+    """Format `host:port` for URL/Host syntax, bracketing IPv6 literals.
+
+    Code-time Codex review Low-1: `--host ::1` previously produced
+    malformed `::1:7321`. HTTP/URL grammar requires brackets for IPv6
+    literals — `[::1]:7321`.
+
+    Heuristic: a host containing `:` and not already starting with `[`
+    is treated as an IPv6 literal. Hostnames + IPv4 pass through.
+    """
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]:{port}"
+    return f"{host}:{port}"
+
+
+def _configure_http_transport(
+    server,
+    *,
+    host: str,
+    port: int,
+    allowed_origins_arg: Optional[str],
+    allowed_hosts_arg: Optional[str] = None,
+) -> None:
+    """Configure FastMCP `server.settings` for streamable-http transport.
+
+    Pure configuration step — does NOT call `server.run()`. Extracted from
+    `_run_http_transport` so unit tests can exercise allowlist derivation,
+    warning emission, and TransportSecuritySettings shape without binding
+    a socket. Codex round-2 High-1 + MCP Streamable HTTP spec; Codex
+    code-time Med-2 added `--allowed-hosts` so LAN clients with Host
+    headers carrying their actual IP can reach the server when
+    `--host 0.0.0.0` is in use.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    authority = _host_to_url_authority(host, port)
+
+    if allowed_origins_arg is None:
+        origins = [f"http://{authority}"]
+        if host == "127.0.0.1":
+            origins.extend([f"http://localhost:{port}", f"http://[::1]:{port}"])
+        protection_enabled = True
+    elif allowed_origins_arg == "":
+        origins = []
+        protection_enabled = False
+        typer.echo(
+            "warning: --allowed-origins '' DISABLES DNS-rebinding protection — any "
+            "origin can reach the MCP server. Pass --allowed-origins URL1,URL2 to "
+            "restrict cross-origin access instead.",
+            err=True,
+        )
+    else:
+        origins = [o.strip() for o in allowed_origins_arg.split(",") if o.strip()]
+        protection_enabled = True
+
+    if host not in _LOOPBACK_HOSTS:
+        typer.echo(
+            "warning: MCP HTTP transport is unauthenticated and exposes read-only "
+            "repo intent data over the network: module file paths, function "
+            "signatures + POR blocks, ADR/plan summaries + frontmatter, "
+            "depends-on/references/supersedes edges with line numbers, and "
+            "provenance metadata. 'Read-only' means no mutation risk but does NOT "
+            "imply low sensitivity. Use --host 127.0.0.1 (the default) for "
+            "local-only access, or pass --allowed-origins to restrict cross-origin "
+            "access explicitly.",
+            err=True,
+        )
+        # Code-time Codex Med-2: LAN clients send `Host: <actual-ip>:<port>`,
+        # not `Host: 0.0.0.0:<port>`. The auto-derived allowed_hosts entry
+        # won't match. Surface the gap if the user hasn't passed
+        # --allowed-hosts to expand the allowlist explicitly.
+        if allowed_hosts_arg is None and protection_enabled:
+            typer.echo(
+                "warning: --host 0.0.0.0 binds all interfaces, but the auto-derived "
+                "Host-header allowlist only includes the bind address. LAN clients "
+                "with Host headers carrying their actual IP/hostname will be rejected "
+                "(HTTP 421). Pass --allowed-hosts 'ip1:port,hostname:port' to expand "
+                "the allowlist, or use --host <specific-ip> instead of 0.0.0.0.",
+                err=True,
+            )
+
+    server.settings.host = host
+    server.settings.port = port
+
+    # `allowed_hosts` matches the request's Host header which includes
+    # the port. For loopback, include the IPv4 + IPv6 synonyms so curl
+    # with any loopback-named Host works.
+    if not protection_enabled:
+        allowed_hosts: list[str] = []
+    elif allowed_hosts_arg is None or allowed_hosts_arg == "":
+        # auto-derive
+        allowed_hosts = [authority]
+        if host == "127.0.0.1":
+            allowed_hosts.extend([f"localhost:{port}", f"[::1]:{port}"])
+    else:
+        allowed_hosts = [
+            h.strip() for h in allowed_hosts_arg.split(",") if h.strip()
+        ]
+    server.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=protection_enabled,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=origins,
+    )
+
+
+def _probe_bind_or_exit(host: str, port: int) -> None:
+    """Try a brief bind on host:port so errno-specific UX surfaces BEFORE
+    `server.run()` swallows it.
+
+    Code-time Codex review caught: `FastMCP.run("streamable-http")` calls
+    uvicorn, which catches OSError inside `Server.startup()` and emits its
+    own `sys.exit(1)` path. The post-`server.run()` `except OSError` we
+    used to have was dead code in production — only the monkey-patched
+    tests ever hit it.
+
+    Strategy: open a probe socket, try to bind, immediately release. If
+    the bind fails, dispatch errno-specific exit(2). If it succeeds, the
+    port was free at probe time; uvicorn picks it up next.
+
+    Race-condition limitation: between probe-release and uvicorn-bind,
+    another process could grab the port. Uncommon enough to accept — that
+    path falls through to uvicorn's own sys.exit(1) with a stderr log.
+    """
+    import errno
+    import socket
+
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        typer.echo(f"error: cannot resolve --host {host!r}: {e}", err=True)
+        raise typer.Exit(2) from e
+
+    if not infos:
+        typer.echo(
+            f"error: no addresses for --host {host!r}. "
+            f"Use --host 127.0.0.1 or 0.0.0.0.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    # Probe the first resolved address (uvicorn's typical pick). If the
+    # probe succeeds, uvicorn binds the same address next.
+    family, sock_type, proto, _, sockaddr = infos[0]
+    sock = socket.socket(family, sock_type, proto)
+    try:
+        sock.bind(sockaddr)
+    except OSError as e:
+        if e.errno == errno.EADDRINUSE:
+            typer.echo(
+                f"error: cannot bind {host}:{port}; port is in use. "
+                f"Choose a different --port.",
+                err=True,
+            )
+            raise typer.Exit(2) from e
+        if e.errno == errno.EACCES:
+            typer.echo(
+                f"error: permission denied binding {host}:{port} (ports <1024 "
+                f"typically require root). Choose --port >=1024.",
+                err=True,
+            )
+            raise typer.Exit(2) from e
+        if e.errno == errno.EADDRNOTAVAIL:
+            typer.echo(
+                f"error: host {host!r} is not a valid bind address on this "
+                f"machine. Use --host 127.0.0.1 or 0.0.0.0.",
+                err=True,
+            )
+            raise typer.Exit(2) from e
+        # Unexpected OSError — re-raise so it surfaces, don't mask as
+        # "port in use" (Codex round-2 Med-3 caught the lump-everything
+        # risk).
+        raise
+    finally:
+        sock.close()
+
+
+def _run_http_transport(
+    server,
+    *,
+    host: str,
+    port: int,
+    allowed_origins_arg: Optional[str],
+    allowed_hosts_arg: Optional[str] = None,
+) -> None:
+    """Configure + run FastMCP streamable-http.
+
+    Errno-specific bind-failure UX is handled BEFORE server.run() via
+    `_probe_bind_or_exit` (the post-`server.run()` handler was dead code
+    per code-time Codex review).
+    """
+    _configure_http_transport(
+        server,
+        host=host,
+        port=port,
+        allowed_origins_arg=allowed_origins_arg,
+        allowed_hosts_arg=allowed_hosts_arg,
+    )
+    _probe_bind_or_exit(host, port)
+    server.run(transport="streamable-http")
 
 
 if __name__ == "__main__":  # pragma: no cover

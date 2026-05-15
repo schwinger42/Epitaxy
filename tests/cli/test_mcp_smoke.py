@@ -176,14 +176,6 @@ def test_mcp_server_por_lineage_reports_v0_stub(synced_index: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_mcp_serve_transport_http_fails_fast(synced_index: Path) -> None:
-    """`--transport http` must exit 2, NOT silently fall back to stdio."""
-    result = runner.invoke(app, ["mcp", "serve", "--transport", "http"])
-    assert result.exit_code == 2
-    assert "reserved for PR3" in result.output
-    assert "not implemented in v0" in result.output
-
-
 def test_mcp_serve_unknown_transport_fails_fast(synced_index: Path) -> None:
     result = runner.invoke(app, ["mcp", "serve", "--transport", "websocket"])
     assert result.exit_code == 2
