@@ -16,7 +16,9 @@ In a semiconductor fab, every recipe step has a documented **goal**, **prerequis
 
 When a senior ML engineer hands you a 30-script PySpark pipeline, you can read the code, trace the call graph, even map the data lineage — but you can't recover **why** `mu = 0.05`, **what** must run first, or **which** downstream caches break if you change line 23. That tacit knowledge lives in their head.
 
-AI agents have the same problem. Claude Code can read your repo, but it has to *guess* at intent. Garbage in, garbage POR out.
+AI coding agents have the same problem. They can read your repo, but they still have to *guess* at intent. Garbage in, garbage POR out.
+
+Epitaxy's bet: large ML projects don't need longer agent chat history. They need an intent layer the agent can query when code changes — so changing a parameter can surface the scripts, downstream artifacts, ADRs, and POR docs that must be reviewed.
 
 ## What Epitaxy does
 
@@ -28,7 +30,9 @@ Epitaxy treats your ML repo like a semiconductor wafer — layer by layer:
 
 3. **MCP-native from day 1** — your AI agent (Claude Code, Codex, Cursor, or any MCP client) queries intent through MCP tools: `por_explain(module)`, `por_trace(param)`, `por_lineage(asset)`. No more "I think this is because…".
 
-4. **Solo-engineer scale** — no Backstage deployment, no enterprise contract. `pip install epitaxy && epi init`.
+4. **Intent graph for change impact** — Epitaxy's data layer connects code, decisions, parameters, plans, and downstream effects so later guardrails can answer: not just "will tests pass?", but "which intent is now stale?"
+
+5. **Solo-engineer scale** — no Backstage deployment, no enterprise contract. `pip install epitaxy && epi sync`.
 
 ## How it differs from what exists
 
@@ -55,6 +59,7 @@ What v0 will include (design specs shipped 2026-05-15; code implementation begin
 Beyond v0 (if traction):
 - [ ] Interactive graph UI (ReactFlow / Cytoscape)
 - [ ] Multi-language support (Scala, R, SQL)
+- [ ] Change-impact + intent-drift guardrails (pre-commit, PR comments, stale badges)
 - [ ] Auto-suggestion mode (LLM proposes POR, human approves)
 
 ⭐ **Star the repo** to get notified when v0 ships.

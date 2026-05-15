@@ -10,6 +10,8 @@ Existing tools cover the structure side well: AST parsers, lineage trackers (Dag
 
 The 2026 update to this framing: LLMs CAN synthesise first-pass intent from code + ADRs + commits + plan markdowns + tests + READMEs. The bottleneck is not extraction; it's **persistence and freshness**. Whatever an LLM extracts today goes stale tomorrow unless the system has a maintenance loop. And whatever a human writes once goes stale next month unless the system can detect drift and propose updates.
 
+This is the key distinction from treating an AI agent's chat transcript as project memory. Large ML projects should not depend on an ever-growing conversation history. They need a queryable Process-of-Record that tells the agent what changed, what depends on it, and which intent artifacts must be reviewed.
+
 So the problem decomposes into four moves: (1) **install** an intent layer onto an existing repo, (2) **maintain** it as code changes, (3) **consume** it (human + AI), (4) **expose** it to other AI agents. These are the 4 pillars Epitaxy is built around.
 
 ## 2. Architecture: the 4 pillars
@@ -25,6 +27,14 @@ Install the intent layer onto an existing repo. Input: a grown ML codebase with 
 ### Pillar 2 — Maintain (always-on)
 
 The hardest pillar. The intent layer must stay fresh as code evolves, otherwise it becomes a liability — documentation that lies is worse than no documentation. Two sub-modes serve different trigger sources:
+
+Pillar 2 is both **change-impact analysis** and **intent-drift detection**:
+
+- **Change impact** answers: "If this parameter, script, feature, cache, table, or model changes, what downstream code and artifacts need attention?"
+- **Intent drift** answers: "Which POR docstrings, ADRs, nested `CLAUDE.md` files, playbooks, or generated explainers now disagree with the code?"
+- **Guardrails** turn those answers into workflow signals: pre-commit warnings, PR comments, drift proposals, stale badges, or MCP responses to an agent editing the affected file.
+
+This is not a test harness. A harness runs code and verifies behavior. Epitaxy is an intent-aware change-management layer: it helps catch the cases where the code may still run, but the recorded rationale, prerequisites, downstream effects, or operational guidance have gone stale.
 
 **Pillar 2a — In-session (AI agent–driven)**
 
@@ -80,6 +90,13 @@ Tools exposed to any AI agent (Claude Code, Codex, Cursor, future agents):
 - `next_action_for_path(file)` — "I'm changing this file, what should I watch for"
 
 **Primary user action**: not direct human use. AI agents call these tools during their own sessions and surface answers in their chat with the human.
+
+The intended agent behavior is practical and concrete. If an agent changes `rank = 128` to `rank = 256`, it should be able to ask Epitaxy:
+
+- Which functions, scripts, pipelines, caches, tables, or model artifacts depend on this value?
+- Which ADRs explain why the old value existed?
+- Which POR docstrings or nested guidance mention the old assumption?
+- Should this change trigger a docs update, an ADR amendment, a cache rebuild, or an operator warning?
 
 **Why bundled with Pillar 3 in v0**: same JSON data layer powers both. Marginal cost of Pillar 4 once Pillar 3 exists is 1-2 days.
 

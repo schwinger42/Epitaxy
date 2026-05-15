@@ -15,6 +15,7 @@ Specifically it commits to:
 
 What's NOT in v0:
 
+- HTTP MCP transport — reserved for PR3 (alongside Progressive-Enhancement HTML for `epi serve`). v0 ships stdio only; `epi mcp serve --transport http` fails-fast with exit 2 per [CLI.md §4](CLI.md#4-epi-mcp--pillar-4-mcp-server-startup).
 - MCP `prompts/` exports — Pillar 2a, deferred to v1.
 - Tools `playbook_for_role`, `next_action_for_path` from ROADMAP §2.4 — deferred to v1.
 - Real `por_lineage` implementation — gated on `data_asset` node type (deferred to v1+, see [SCHEMA §2.6](SCHEMA.md#26-data_asset-deferred-to-v1)).
@@ -25,7 +26,7 @@ v0 MCP server lifecycle:
 
 1. User runs `epi mcp serve` (see [CLI.md §4](CLI.md#4-epi-mcp--pillar-4-mcp-server-startup)).
 2. Server reads `.epitaxy/index.json` once at startup to validate it exists, then re-reads on every tool call (per CLI.md "no long-lived state").
-3. Server registers 3 tools via the Anthropic MCP SDK; client (Claude Code / Codex / Cursor / etc.) calls them via JSON-RPC 2.0 over stdio (default) or HTTP.
+3. Server registers 3 tools via the Anthropic MCP SDK; client (Claude Code / Codex / Cursor / etc.) calls them via JSON-RPC 2.0 over stdio. (HTTP transport is reserved for PR3 and fails-fast in v0 — see [CLI.md §4](CLI.md#4-epi-mcp--pillar-4-mcp-server-startup).)
 4. Server is read-only and stateless. Stop with SIGINT.
 
 All tools follow this call shape (MCP spec):
@@ -279,7 +280,7 @@ Not strictly part of the design surface — captured here so the implementation 
 - **Tool registration**: pydantic-derived JSON schemas at registration time. Output shapes spec'd in this doc become `pydantic.BaseModel` subclasses; input shapes map to method signatures with typed parameters.
 - **Index access**: re-read `.epitaxy/index.json` on every tool call (sub-millisecond for v0 repo sizes per [CLI.md §4](CLI.md#4-epi-mcp--pillar-4-mcp-server-startup)). No caching, no incremental update tracking.
 - **No write paths.** Tool implementations never call `open(..., "w")`. The v0 MCP server has no write capability at all — enforced by code review, not just convention.
-- **Transport**: stdio default per MCP convention; HTTP supported per [CLI.md §4](CLI.md#4-epi-mcp--pillar-4-mcp-server-startup) `--transport http`.
+- **Transport**: stdio only in v0. `--transport http` is reserved for PR3 and fails-fast with exit 2 in v0 per [CLI.md §4](CLI.md#4-epi-mcp--pillar-4-mcp-server-startup). The flag remains in the surface so MCP clients that cache tool lists don't need to invalidate-and-rediscover when HTTP ships.
 
 ## 8. Open items / reserved for v1+
 

@@ -108,7 +108,7 @@ $ epi mcp serve [OPTIONS]
 
 | Flag | Type | Default | Notes |
 |---|---|---|---|
-| `--transport stdio\|http` | choice | `stdio` | MCP convention for local AI-agent integration is stdio; `http` reserved for remote-host scenarios. |
+| `--transport stdio\|http` | choice | `stdio` | v0 ships stdio only. `--transport http` is reserved for PR3 — fails-fast with exit 2 in v0 (see [MCP.md §7](MCP.md#7-implementation-notes)). |
 | `--port INT` | int | `7321` | Only meaningful with `--transport http`. Arbitrary high port; no MCP-standard HTTP port exists. |
 | `--index PATH` | string | `.epitaxy/index.json` | Path to the index. |
 | `--verbose / -v` / `--quiet / -q` | bool | `false` | Same conventions. |

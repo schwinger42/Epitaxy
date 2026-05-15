@@ -10,28 +10,34 @@ Public repo: https://github.com/schwinger42/Epitaxy
 
 ## Status
 
-📐 **v0 design-doc phase shipped 2026-05-15**: SCHEMA + CLI + MCP design specs on origin. Gate lifted 2026-05-14 (RecSys Phase 2 launched). **Parser implementation begins next.** Still no Python code in `src/epitaxy/`.
+🚀 **PR1 (tracer-bullet) merged 2026-05-15**, version `0.1.0a1`. `epi sync` + `epi serve` + `epi mcp serve` functional end-to-end on Python repos. SCHEMA subset only: `module`/`function` nodes + `depends-on` edges (2 of 4 default node types, 1 of 3 default edge types). ADR/plan parsing, POR docstring frontmatter, parameter extraction, MCP HTTP transport all **fail-fast** (not silent no-op) and tracked for PR2/PR4. 48 tests, 87% coverage.
+
+**Active: PR2** — ADR + plan markdown parsing + POR docstring frontmatter. Closes the doc-parsing gap so v0 SCHEMA-default-conformance is real. After PR2: version `0.1.0a1` → `0.1.0`, classifier `1 - Planning` → `2 - Pre-Alpha`.
 
 Detail: [docs/ROADMAP.md](docs/ROADMAP.md) · specs: [docs/SCHEMA.md](docs/SCHEMA.md) · [docs/CLI.md](docs/CLI.md) · [docs/MCP.md](docs/MCP.md).
 
-## Future layout (placeholder — applies when v0 implementation begins)
+## Layout (post-PR1)
 
 ```
 ~/PycharmProjects/Epitaxy/
 ├── src/epitaxy/
-│   ├── parser/      # Python AST → POR data layer
-│   ├── store/       # JSON index, .epitaxy/index.json schema
-│   ├── mcp_server/  # MCP tools: por_explain / por_trace / por_lineage
-│   └── cli/         # `epi sync`, `epi serve`, etc.
+│   ├── parser/      # Python AST → POR data layer (PR1: module/function/depends-on; PR2: ADR/plan/POR/references/supersedes)
+│   ├── store/       # pydantic models + .epitaxy/index.json read/write
+│   ├── serve/       # `epi serve` drill-down (PR1: hash-based anchors, no client JS)
+│   ├── mcp_server/  # `epi mcp serve` — MCP tools por_explain / por_trace / por_lineage (PR1: stdio only; HTTP fail-fast tracked for PR3)
+│   └── cli/         # `epi sync`, `epi serve`, `epi mcp serve`
 ├── docs/
-│   └── ROADMAP.md   # v0 → v3 phasing (already shipped)
-├── tests/
+│   ├── ROADMAP.md   # v0 → v3 phasing
+│   ├── SCHEMA.md    # node/edge types + inline POR structure
+│   ├── CLI.md       # `epi *` command contracts + exit codes
+│   └── MCP.md       # MCP tool contracts + transport wire format
+├── tests/           # 48 tests, 87% coverage as of PR1
 ├── CLAUDE.md        # this file (project memory)
 ├── README.md
 └── pyproject.toml
 ```
 
-v0 implementation begins 2026-05-15. `src/epitaxy/` skeleton is created on demand as each pillar's code lands — don't scaffold empty dirs ahead of need.
+Subpackages scaffolded by PR1 — extend in place per PR scope, don't reshape directory layout absent a strong reason.
 
 ## Core principles (binding for any session writing Epitaxy code)
 
@@ -45,10 +51,19 @@ v0 implementation begins 2026-05-15. `src/epitaxy/` skeleton is created on deman
 
 ## Current focus
 
-**Active: v0 parser implementation.** Design surface complete ([SCHEMA](docs/SCHEMA.md) / [CLI](docs/CLI.md) / [MCP](docs/MCP.md)) — next is `src/epitaxy/` skeleton + `epi sync` Python AST → index.json pipeline + `epi serve` drill-down + `epi mcp serve`. Pillar 3 (Consume) + Pillar 4 (Query), read-only on user repo, ~3-5 focused days per [ROADMAP §3](docs/ROADMAP.md#3-phasing-v0--v3).
+**Active: PR2 — doc-parsing.** PR1 shipped the Python AST → index pipeline + drill-down + MCP stdio. PR2 closes the SCHEMA gap:
+
+- Adds `adr` + `plan` node types ([SCHEMA §2.3 / §2.4](docs/SCHEMA.md#2-node-types))
+- Adds `references` + `supersedes` edge types ([SCHEMA §3](docs/SCHEMA.md#3-edge-types))
+- Adds POR YAML frontmatter recognition in module/function docstrings ([SCHEMA §4](docs/SCHEMA.md#4-inline-por-structure-optional))
+- Bumps `0.1.0a1` → `0.1.0` + `Development Status :: 2 - Pre-Alpha`
+
+Out of PR2 scope: HTTP MCP transport (PR3 alongside Progressive-Enhancement HTML for `epi serve`); parameter extraction + `ParameterNode` + `decides` edge (PR4); `data_asset` + real `por_lineage` (v1+).
+
+Pillar 3 (Consume) + Pillar 4 (Query), read-only on user repo. ~1 focused day for PR2 per [ROADMAP §3](docs/ROADMAP.md#3-phasing-v0--v3).
 
 ## Detail reference
 
 - [docs/ROADMAP.md](docs/ROADMAP.md) — 4 pillars in depth, v0 → v3 phasing with what-ships-per-phase, LLM-drafts safety design, positioning vs platform tools (pre-commit / dependabot / dbt docs), explicit non-goals, open design questions.
 - [README.md](README.md) — public landing page, honest v0 scope.
-- [pyproject.toml](pyproject.toml) — `epitaxy v0.0.1`, `requires-python = ">=3.10"`, no dependencies yet.
+- [pyproject.toml](pyproject.toml) — `epitaxy v0.1.0a1`, `requires-python = ">=3.10"`, deps: `typer`, `pydantic`, `mcp`, `tomli` (py<3.11). PR2 adds `pyyaml`.

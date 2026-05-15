@@ -2,6 +2,7 @@
 
 from .index import read_index, write_index
 from .models import (
+    AdrNode,
     Edge,
     FunctionNode,
     Index,
@@ -9,9 +10,11 @@ from .models import (
     IndexStats,
     ModuleNode,
     Node,
+    PlanNode,
 )
 
 __all__ = [
+    "AdrNode",
     "Edge",
     "FunctionNode",
     "Index",
@@ -19,6 +22,7 @@ __all__ = [
     "IndexStats",
     "ModuleNode",
     "Node",
+    "PlanNode",
     "read_index",
     "write_index",
 ]

@@ -1,7 +1,8 @@
 """Python AST parser → module + function nodes + depends-on edges.
 
 PR1 scope (tracer-bullet) per docs/SCHEMA.md §2.1, §2.2, §3.
-POR docstring frontmatter recognition deferred to PR2 (`node.por` always None).
+PR2 adds POR docstring frontmatter via parser.por — `node.por` is now
+populated when the docstring opens with `---…---`.
 
 Function-call resolution heuristics — explicit boundaries locked by tests:
 
@@ -29,6 +30,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..store.models import Edge, FunctionNode, ModuleNode, Node
+from .por import PORParseError, parse_docstring as parse_por_docstring
+from .refs import BodyRecord
 
 
 @dataclass(frozen=True)
@@ -179,7 +182,7 @@ def parse_repo(
     *,
     package_roots: list[str] | None = None,
     extracted_at: datetime | None = None,
-) -> tuple[list[Node], list[Edge], list[ParseError]]:
+) -> tuple[list[Node], list[Edge], list[ParseError], list[BodyRecord]]:
     """Parse a set of Python files into intent-graph nodes + edges + parse errors.
 
     `py_files` are absolute paths under `repo_root`. Glob expansion and exclude
@@ -192,6 +195,11 @@ def parse_repo(
     Files that fail to AST-parse are skipped and surfaced in the returned
     `list[ParseError]` so the CLI can exit 3 per CLI.md §7 (Codex review
     Medium-4).
+
+    PR2: returns a 4th element — `list[BodyRecord]` accumulating
+    post-frontmatter docstring bodies for the references-edge final pass
+    (parser/refs.py). One record per module/function with a non-empty
+    docstring body.
     """
     extracted_at = extracted_at or datetime.now(timezone.utc)
     roots = list(package_roots or [])
@@ -218,26 +226,83 @@ def parse_repo(
 
     nodes: list[Node] = []
     edges: list[Edge] = []
+    body_records: list[BodyRecord] = []
     seen_edges: set[tuple[str, str, str]] = set()
     all_function_ids: set[str] = set()
     per_module: list[dict] = []
 
     # Pass 2: emit ModuleNode + FunctionNode for every parsed file; record imports
     for rel_path, dotted, tree in parsed:
+        abs_path_for_errors = repo_root / rel_path  # for ParseError attribution
         mod_id = module_id(rel_path)
+
+        # POR docstring frontmatter for the module
+        mod_raw_doc = ast.get_docstring(tree)
+        mod_doc_body: str | None = None  # post-frontmatter body for refs pass
+        try:
+            mod_por_result = parse_por_docstring(mod_raw_doc)
+            mod_por = mod_por_result.por
+            mod_doc = _first_paragraph(mod_por_result.body)
+            mod_doc_body = mod_por_result.body
+        except PORParseError as e:
+            errors.append(
+                ParseError(
+                    path=abs_path_for_errors,
+                    reason=f"module docstring POR: {e.reason}",
+                )
+            )
+            mod_por = None
+            mod_doc = _first_paragraph(mod_raw_doc)
+            mod_doc_body = mod_raw_doc
+
         nodes.append(
             ModuleNode(
                 id=mod_id,
                 path=rel_path,
-                doc=_first_paragraph(ast.get_docstring(tree)),
+                doc=mod_doc,
+                por=mod_por,
                 provenance="ast",
                 extracted_at=extracted_at,
             )
         )
 
+        if mod_doc_body and mod_doc_body.strip():
+            # body_start_line is approximate: module docstring lives at top
+            # of file; the body proper begins on line 2+ depending on
+            # frontmatter length. Best-effort attribution; line precision
+            # within a docstring is PR3+ territory.
+            body_records.append(
+                BodyRecord(
+                    body_text=mod_doc_body,
+                    source_node_id=mod_id,
+                    source_path=rel_path,
+                    body_start_line=1,
+                    source_kind="docstring",
+                )
+            )
+
         functions: dict[str, FuncDef] = {}
         for qn, fdef, line in _walk_functions(tree):
             fid = function_id(rel_path, qn)
+
+            fn_raw_doc = ast.get_docstring(fdef)
+            fn_doc_body: str | None = None
+            try:
+                fn_por_result = parse_por_docstring(fn_raw_doc)
+                fn_por = fn_por_result.por
+                fn_doc = _first_paragraph(fn_por_result.body)
+                fn_doc_body = fn_por_result.body
+            except PORParseError as e:
+                errors.append(
+                    ParseError(
+                        path=abs_path_for_errors,
+                        reason=f"{qn} docstring POR: {e.reason}",
+                    )
+                )
+                fn_por = None
+                fn_doc = _first_paragraph(fn_raw_doc)
+                fn_doc_body = fn_raw_doc
+
             nodes.append(
                 FunctionNode(
                     id=fid,
@@ -246,12 +311,24 @@ def parse_repo(
                     qualname=qn,
                     signature=_render_signature(fdef),
                     line=line,
-                    doc=_first_paragraph(ast.get_docstring(fdef)),
+                    doc=fn_doc,
+                    por=fn_por,
                     provenance="ast",
                 )
             )
             functions[qn] = fdef
             all_function_ids.add(fid)
+
+            if fn_doc_body and fn_doc_body.strip():
+                body_records.append(
+                    BodyRecord(
+                        body_text=fn_doc_body,
+                        source_node_id=fid,
+                        source_path=rel_path,
+                        body_start_line=line,
+                        source_kind="docstring",
+                    )
+                )
 
         imports: dict[str, str] = {}
         for stmt in tree.body:
@@ -335,4 +412,4 @@ def parse_repo(
                 )
                 seen_edges.add(edge_key)
 
-    return nodes, edges, errors
+    return nodes, edges, errors, body_records

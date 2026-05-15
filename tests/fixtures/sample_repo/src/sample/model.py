@@ -1,4 +1,11 @@
-"""Sample model that depends on data — exercises all 3 supported call shapes.
+"""---
+goal: train ranker over the data layer
+why: rank=128 chosen per [ADR 2026-04](../../decisions/2026-04-rank-dim.md)
+prereqs: data loaded via [data.py](src/sample/data.py)
+decisions:
+  - adr:decisions/2026-04-rank-dim.md
+---
+Sample model that depends on data — exercises all 3 supported call shapes.
 
 Uses PEP-conventional src-layout imports (`from sample.data import load`,
 NOT `from src.sample.data import load`) — the natural form after

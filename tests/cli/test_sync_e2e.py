@@ -96,7 +96,7 @@ def test_sync_skips_tip_when_gitignore_lists_epitaxy(sample_repo: Path) -> None:
 def test_version_flag(sample_repo: Path) -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "0.1.0a1" in result.output
+    assert "0.1.0" in result.output
 
 
 def test_sync_parameters_enabled_in_config_also_fails_fast(
