@@ -443,25 +443,48 @@ def _configure_http_transport(
     )
 
 
-def _run_http_transport(
-    server,
-    *,
-    host: str,
-    port: int,
-    allowed_origins_arg: Optional[str],
-) -> None:
-    """Configure + run FastMCP streamable-http with errno-aware bind UX."""
+def _probe_bind_or_exit(host: str, port: int) -> None:
+    """Try a brief bind on host:port so errno-specific UX surfaces BEFORE
+    `server.run()` swallows it.
+
+    Code-time Codex review caught: `FastMCP.run("streamable-http")` calls
+    uvicorn, which catches OSError inside `Server.startup()` and emits its
+    own `sys.exit(1)` path. The post-`server.run()` `except OSError` we
+    used to have was dead code in production — only the monkey-patched
+    tests ever hit it.
+
+    Strategy: open a probe socket, try to bind, immediately release. If
+    the bind fails, dispatch errno-specific exit(2). If it succeeds, the
+    port was free at probe time; uvicorn picks it up next.
+
+    Race-condition limitation: between probe-release and uvicorn-bind,
+    another process could grab the port. Uncommon enough to accept — that
+    path falls through to uvicorn's own sys.exit(1) with a stderr log.
+    """
     import errno
     import socket
 
-    _configure_http_transport(
-        server, host=host, port=port, allowed_origins_arg=allowed_origins_arg
-    )
-
     try:
-        server.run(transport="streamable-http")
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        typer.echo(f"error: cannot resolve --host {host!r}: {e}", err=True)
+        raise typer.Exit(2) from e
+
+    if not infos:
+        typer.echo(
+            f"error: no addresses for --host {host!r}. "
+            f"Use --host 127.0.0.1 or 0.0.0.0.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    # Probe the first resolved address (uvicorn's typical pick). If the
+    # probe succeeds, uvicorn binds the same address next.
+    family, sock_type, proto, _, sockaddr = infos[0]
+    sock = socket.socket(family, sock_type, proto)
+    try:
+        sock.bind(sockaddr)
     except OSError as e:
-        # Errno-specific bind-failure UX per Codex round-1 Low-2 + round-2 Med-3.
         if e.errno == errno.EADDRINUSE:
             typer.echo(
                 f"error: cannot bind {host}:{port}; port is in use. "
@@ -483,15 +506,32 @@ def _run_http_transport(
                 err=True,
             )
             raise typer.Exit(2) from e
-        if isinstance(e, socket.gaierror):
-            typer.echo(
-                f"error: cannot resolve --host {host!r}: {e}",
-                err=True,
-            )
-            raise typer.Exit(2) from e
-        # Unexpected OSError — surface as generic failure rather than mask as
-        # "port in use" (Codex round-2 Med-3 caught the lump-everything risk).
+        # Unexpected OSError — re-raise so it surfaces, don't mask as
+        # "port in use" (Codex round-2 Med-3 caught the lump-everything
+        # risk).
         raise
+    finally:
+        sock.close()
+
+
+def _run_http_transport(
+    server,
+    *,
+    host: str,
+    port: int,
+    allowed_origins_arg: Optional[str],
+) -> None:
+    """Configure + run FastMCP streamable-http.
+
+    Errno-specific bind-failure UX is handled BEFORE server.run() via
+    `_probe_bind_or_exit` (the post-`server.run()` handler was dead code
+    per code-time Codex review).
+    """
+    _configure_http_transport(
+        server, host=host, port=port, allowed_origins_arg=allowed_origins_arg
+    )
+    _probe_bind_or_exit(host, port)
+    server.run(transport="streamable-http")
 
 
 if __name__ == "__main__":  # pragma: no cover

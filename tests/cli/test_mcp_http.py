@@ -139,32 +139,59 @@ def test_empty_allowed_origins_disables_protection_with_warning(
 # --------------------------------------------------------------------------- #
 
 
-def _patch_run_to_raise(monkeypatch, exc: BaseException) -> None:
-    """Make FastMCP.run() raise `exc` instead of binding."""
-    from mcp.server.fastmcp import FastMCP
+def _patch_socket_bind_to_raise(monkeypatch, exc: BaseException) -> None:
+    """Make socket.socket.bind() raise `exc` — drives _probe_bind_or_exit.
 
-    def fake_run(self, transport: str = "stdio", **_kwargs) -> None:  # noqa: ARG001
+    Code-time Codex review caught: the OLD tests monkey-patched FastMCP.run
+    which made the assertions pass but never hit the real dispatch path
+    (uvicorn catches OSError internally and sys.exit(1)s before our
+    `except OSError` could fire). New strategy: probe-the-bind helper
+    handles errno dispatch BEFORE server.run is called, so the right
+    target to mock is `socket.socket.bind`.
+    """
+    real_bind = socket.socket.bind
+
+    def fake_bind(self, *args, **kwargs):  # noqa: ARG001
         raise exc
 
-    monkeypatch.setattr(FastMCP, "run", fake_run)
+    monkeypatch.setattr(socket.socket, "bind", fake_bind)
+    # Keep a reference so the original is restorable (monkeypatch does this
+    # automatically, but kept for diagnostic clarity).
+    _ = real_bind
 
 
-def test_eaddrinuse_exits_2_with_port_hint(
-    synced_index: Path, monkeypatch: pytest.MonkeyPatch
+def test_eaddrinuse_exits_2_with_port_hint_via_real_bind(
+    synced_index: Path, tmp_path: Path
 ) -> None:
-    _patch_run_to_raise(monkeypatch, OSError(errno.EADDRINUSE, "Address in use"))
-    result = runner.invoke(
-        app, ["mcp", "serve", "--transport", "http", "--port", "7321"]
-    )
-    assert result.exit_code == 2
-    assert "port is in use" in result.output
-    assert "Choose a different --port" in result.output
+    """Integration: actually bind a port + verify the second bind exits 2.
+
+    This is the real-world path Codex round-2 Med-3 was concerned about —
+    earlier mock-based tests asserted a code path that uvicorn would have
+    bypassed. Holds the port in-process so it's tied to test scope.
+    """
+    # Bind a socket on a free port so we own it for the duration of the test.
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    holder.bind(("127.0.0.1", 0))
+    holder.listen(1)
+    held_port = holder.getsockname()[1]
+    try:
+        result = runner.invoke(
+            app,
+            ["mcp", "serve", "--transport", "http", "--port", str(held_port)],
+        )
+        assert result.exit_code == 2, result.output
+        assert "port is in use" in result.output
+        assert "Choose a different --port" in result.output
+    finally:
+        holder.close()
 
 
 def test_eacces_exits_2_with_root_hint(
     synced_index: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _patch_run_to_raise(monkeypatch, OSError(errno.EACCES, "Permission denied"))
+    _patch_socket_bind_to_raise(
+        monkeypatch, OSError(errno.EACCES, "Permission denied")
+    )
     result = runner.invoke(
         app, ["mcp", "serve", "--transport", "http", "--port", "80"]
     )
@@ -176,7 +203,7 @@ def test_eacces_exits_2_with_root_hint(
 def test_eaddrnotavail_exits_2_with_bind_hint(
     synced_index: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _patch_run_to_raise(
+    _patch_socket_bind_to_raise(
         monkeypatch, OSError(errno.EADDRNOTAVAIL, "Cannot assign requested address")
     )
     result = runner.invoke(
@@ -189,9 +216,12 @@ def test_eaddrnotavail_exits_2_with_bind_hint(
 def test_gaierror_exits_2_with_resolve_hint(
     synced_index: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _patch_run_to_raise(
-        monkeypatch, socket.gaierror(-2, "Name or service not known")
-    )
+    """Bad hostname → getaddrinfo raises gaierror → clean exit 2."""
+
+    def fake_getaddrinfo(*args, **kwargs):
+        raise socket.gaierror(-2, "Name or service not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
     result = runner.invoke(
         app, ["mcp", "serve", "--transport", "http", "--host", "not-a-real-host.invalid"]
     )
@@ -202,12 +232,14 @@ def test_gaierror_exits_2_with_resolve_hint(
 def test_unknown_oserror_does_not_mask_as_port_in_use(
     synced_index: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Codex round-2 Med-3: bare OSError without known errno surfaces as-is."""
-    _patch_run_to_raise(monkeypatch, OSError(errno.EINTR, "Interrupted"))
+    """Codex round-2 Med-3 lock: bare OSError without known errno surfaces
+    as-is — does NOT get masked as 'port in use'."""
+    _patch_socket_bind_to_raise(
+        monkeypatch, OSError(errno.EINTR, "Interrupted")
+    )
     result = runner.invoke(
         app, ["mcp", "serve", "--transport", "http"]
     )
-    # Non-handled errno re-raises rather than masking as port-in-use
     assert result.exit_code != 0
     assert "port is in use" not in result.output
 
