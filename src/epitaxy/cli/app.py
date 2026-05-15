@@ -316,12 +316,29 @@ def mcp_serve(
     transport: str = typer.Option(
         "stdio",
         "--transport",
-        help="Transport: 'stdio' (default) or 'http' (reserved for PR3 — fails fast in v0).",
+        help="Transport: 'stdio' (default) or 'http' (MCP streamable-http per spec).",
     ),
-    port: int = typer.Option(  # noqa: ARG001  (reserved for PR3 http transport)
+    port: int = typer.Option(
         7321,
         "--port",
-        help="Port for http transport (PR3 only).",
+        help="Bind port for HTTP transport. Ignored when --transport stdio.",
+    ),
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help=(
+            "Bind host for HTTP transport. Default 127.0.0.1 (loopback only). "
+            "Pass 0.0.0.0 for LAN exposure — emits an unauthenticated-exposure warning."
+        ),
+    ),
+    allowed_origins: Optional[str] = typer.Option(
+        None,
+        "--allowed-origins",
+        help=(
+            "Comma-separated Origin allowlist for HTTP transport (DNS-rebinding "
+            "protection per MCP spec). Default: auto-derive from --host and --port. "
+            "Pass empty string ('') to disable protection — NOT recommended."
+        ),
     ),
     index: Optional[Path] = typer.Option(
         None,
@@ -330,15 +347,7 @@ def mcp_serve(
     ),
 ) -> None:
     """Start the Pillar-4 MCP server (3 tools: por_explain / por_trace / por_lineage)."""
-    _ = port  # reserved for PR3 http transport; flag accepted for forward-compat help text
-    if transport == "http":
-        typer.echo(
-            "error: --transport http is reserved for PR3 and not implemented in v0 "
-            "(see docs/MCP.md §7). Use --transport stdio (the default).",
-            err=True,
-        )
-        raise typer.Exit(2)
-    if transport != "stdio":
+    if transport not in ("stdio", "http"):
         typer.echo(
             f"error: unknown --transport value {transport!r}. Expected 'stdio' or 'http'.",
             err=True,
@@ -356,7 +365,119 @@ def mcp_serve(
     from epitaxy.mcp_server import build_server
 
     server = build_server(index_path)
-    server.run(transport="stdio")
+
+    if transport == "stdio":
+        server.run(transport="stdio")
+        return
+
+    _run_http_transport(
+        server, host=host, port=port, allowed_origins_arg=allowed_origins
+    )
+
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _run_http_transport(
+    server,
+    *,
+    host: str,
+    port: int,
+    allowed_origins_arg: Optional[str],
+) -> None:
+    """Configure FastMCP transport_security + run streamable-http with errno-aware bind UX.
+
+    Per Codex round-2 High-1 + MCP Streamable HTTP spec, DNS-rebinding
+    protection is ON by default. The `--allowed-origins ""` opt-out is
+    explicit-only and surfaces a stderr warning.
+    """
+    import errno
+    import socket
+
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    if allowed_origins_arg is None:
+        origins = [f"http://{host}:{port}"]
+        if host == "127.0.0.1":
+            origins.extend([f"http://localhost:{port}", f"http://[::1]:{port}"])
+        protection_enabled = True
+    elif allowed_origins_arg == "":
+        origins = []
+        protection_enabled = False
+        typer.echo(
+            "warning: --allowed-origins '' DISABLES DNS-rebinding protection — any "
+            "origin can reach the MCP server. Pass --allowed-origins URL1,URL2 to "
+            "restrict cross-origin access instead.",
+            err=True,
+        )
+    else:
+        origins = [o.strip() for o in allowed_origins_arg.split(",") if o.strip()]
+        protection_enabled = True
+
+    if host not in _LOOPBACK_HOSTS:
+        typer.echo(
+            "warning: MCP HTTP transport is unauthenticated and exposes read-only "
+            "repo intent data over the network: module file paths, function "
+            "signatures + POR blocks, ADR/plan summaries + frontmatter, "
+            "depends-on/references/supersedes edges with line numbers, and "
+            "provenance metadata. 'Read-only' means no mutation risk but does NOT "
+            "imply low sensitivity. Use --host 127.0.0.1 (the default) for "
+            "local-only access, or pass --allowed-origins to restrict cross-origin "
+            "access explicitly.",
+            err=True,
+        )
+
+    server.settings.host = host
+    server.settings.port = port
+    # `allowed_hosts` matches the request's Host header which includes the
+    # port — `f"{host}:{port}"` is the specific bind. For loopback, also
+    # include the synonyms so curl-with-`Host: localhost:{port}` works.
+    if protection_enabled:
+        allowed_hosts = [f"{host}:{port}"]
+        if host == "127.0.0.1":
+            allowed_hosts.extend([f"localhost:{port}", f"[::1]:{port}"])
+    else:
+        allowed_hosts = []
+    server.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=protection_enabled,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=origins,
+    )
+
+    try:
+        server.run(transport="streamable-http")
+    except OSError as e:
+        # Errno-specific bind-failure UX per Codex round-1 Low-2 + round-2 Med-3.
+        if e.errno == errno.EADDRINUSE:
+            typer.echo(
+                f"error: cannot bind {host}:{port}; port is in use. "
+                f"Choose a different --port.",
+                err=True,
+            )
+            raise typer.Exit(2) from e
+        if e.errno == errno.EACCES:
+            typer.echo(
+                f"error: permission denied binding {host}:{port} (ports <1024 "
+                f"typically require root). Choose --port >=1024.",
+                err=True,
+            )
+            raise typer.Exit(2) from e
+        if e.errno == errno.EADDRNOTAVAIL:
+            typer.echo(
+                f"error: host {host!r} is not a valid bind address on this "
+                f"machine. Use --host 127.0.0.1 or 0.0.0.0.",
+                err=True,
+            )
+            raise typer.Exit(2) from e
+        if isinstance(e, socket.gaierror):
+            typer.echo(
+                f"error: cannot resolve --host {host!r}: {e}",
+                err=True,
+            )
+            raise typer.Exit(2) from e
+        # Unexpected OSError — surface as generic failure rather than mask as
+        # "port in use" (Codex round-2 Med-3 caught the lump-everything risk).
+        raise
 
 
 if __name__ == "__main__":  # pragma: no cover
