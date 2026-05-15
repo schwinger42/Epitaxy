@@ -296,12 +296,12 @@ def mcp_serve(
     transport: str = typer.Option(
         "stdio",
         "--transport",
-        help="Transport: 'stdio' (default) or 'http' (not implemented in PR1 — fails fast).",
+        help="Transport: 'stdio' (default) or 'http' (reserved for PR3 — fails fast in v0).",
     ),
-    port: int = typer.Option(  # noqa: ARG001  (reserved for PR2 http transport)
+    port: int = typer.Option(  # noqa: ARG001  (reserved for PR3 http transport)
         7321,
         "--port",
-        help="Port for http transport (PR2 only).",
+        help="Port for http transport (PR3 only).",
     ),
     index: Optional[Path] = typer.Option(
         None,
@@ -310,11 +310,11 @@ def mcp_serve(
     ),
 ) -> None:
     """Start the Pillar-4 MCP server (3 tools: por_explain / por_trace / por_lineage)."""
-    _ = port  # reserved for PR2 http transport; flag accepted for forward-compat help text
+    _ = port  # reserved for PR3 http transport; flag accepted for forward-compat help text
     if transport == "http":
         typer.echo(
-            "error: --transport http is not implemented in this build "
-            "(PR1 tracer-bullet). Tracking in PR2.",
+            "error: --transport http is reserved for PR3 and not implemented in v0 "
+            "(see docs/MCP.md §7). Use --transport stdio (the default).",
             err=True,
         )
         raise typer.Exit(2)
