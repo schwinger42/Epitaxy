@@ -378,22 +378,20 @@ def mcp_serve(
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
 
-def _run_http_transport(
+def _configure_http_transport(
     server,
     *,
     host: str,
     port: int,
     allowed_origins_arg: Optional[str],
 ) -> None:
-    """Configure FastMCP transport_security + run streamable-http with errno-aware bind UX.
+    """Configure FastMCP `server.settings` for streamable-http transport.
 
-    Per Codex round-2 High-1 + MCP Streamable HTTP spec, DNS-rebinding
-    protection is ON by default. The `--allowed-origins ""` opt-out is
-    explicit-only and surfaces a stderr warning.
+    Pure configuration step — does NOT call `server.run()`. Extracted from
+    `_run_http_transport` so unit tests can exercise allowlist derivation,
+    warning emission, and TransportSecuritySettings shape without binding
+    a socket. Codex round-2 High-1 + MCP Streamable HTTP spec.
     """
-    import errno
-    import socket
-
     from mcp.server.transport_security import TransportSecuritySettings
 
     if allowed_origins_arg is None:
@@ -442,6 +440,22 @@ def _run_http_transport(
         enable_dns_rebinding_protection=protection_enabled,
         allowed_hosts=allowed_hosts,
         allowed_origins=origins,
+    )
+
+
+def _run_http_transport(
+    server,
+    *,
+    host: str,
+    port: int,
+    allowed_origins_arg: Optional[str],
+) -> None:
+    """Configure + run FastMCP streamable-http with errno-aware bind UX."""
+    import errno
+    import socket
+
+    _configure_http_transport(
+        server, host=host, port=port, allowed_origins_arg=allowed_origins_arg
     )
 
     try:
