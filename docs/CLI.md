@@ -37,7 +37,7 @@ Conventions across all subcommands:
 
 - `--help` is supported on every subcommand.
 - `--version` is top-level only; prints the version from `pyproject.toml [project].version` at install time.
-- Every subcommand respects `--verbose / -v` and `--quiet / -q` for log level (default: human-friendly summary on stderr). The two flags are mutually exclusive.
+- `epi sync` and `epi serve` accept `--verbose / -v` and `--quiet / -q` for log level (default: human-friendly summary on stderr). The two flags are mutually exclusive. `epi mcp serve` does NOT carry these flags — stdio MCP is silent by contract, and HTTP transport logs via uvicorn / FastMCP, not the Epitaxy CLI.
 
 ## 2. `epi sync` — generate the intent index
 
@@ -114,7 +114,6 @@ $ epi mcp serve [OPTIONS]
 | `--allowed-origins STR` | string | (auto) | Comma-separated `Origin` allowlist for HTTP DNS-rebinding protection. Default auto-derives from `--host` + `--port` (loopback variants when host is `127.0.0.1`). Pass `""` to disable protection — NOT recommended; emits a stderr warning. |
 | `--allowed-hosts STR` | string | (auto) | Comma-separated `Host`-header allowlist for HTTP DNS-rebinding protection. Default auto-derives from `--host` + `--port` (loopback variants when host is `127.0.0.1`). Required for LAN exposure with `--host 0.0.0.0` since real clients send `Host: <their-ip>:<port>`, not `Host: 0.0.0.0:<port>`; without it MCP middleware returns HTTP 421. |
 | `--index PATH` | string | `.epitaxy/index.json` | Path to the index. |
-| `--verbose / -v` / `--quiet / -q` | bool | `false` | Same conventions. |
 
 ### Behavior contract
 
