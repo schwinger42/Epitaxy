@@ -340,6 +340,16 @@ def mcp_serve(
             "Pass empty string ('') to disable protection — NOT recommended."
         ),
     ),
+    allowed_hosts: Optional[str] = typer.Option(
+        None,
+        "--allowed-hosts",
+        help=(
+            "Comma-separated Host header allowlist for HTTP transport. Default: "
+            "auto-derive from --host + --port (loopback variants when --host is "
+            "127.0.0.1). Pass `host1:port1,host2:port2` for LAN exposure scenarios "
+            "where clients send a different Host than the bind address."
+        ),
+    ),
     index: Optional[Path] = typer.Option(
         None,
         "--index",
@@ -371,11 +381,30 @@ def mcp_serve(
         return
 
     _run_http_transport(
-        server, host=host, port=port, allowed_origins_arg=allowed_origins
+        server,
+        host=host,
+        port=port,
+        allowed_origins_arg=allowed_origins,
+        allowed_hosts_arg=allowed_hosts,
     )
 
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _host_to_url_authority(host: str, port: int) -> str:
+    """Format `host:port` for URL/Host syntax, bracketing IPv6 literals.
+
+    Code-time Codex review Low-1: `--host ::1` previously produced
+    malformed `::1:7321`. HTTP/URL grammar requires brackets for IPv6
+    literals — `[::1]:7321`.
+
+    Heuristic: a host containing `:` and not already starting with `[`
+    is treated as an IPv6 literal. Hostnames + IPv4 pass through.
+    """
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]:{port}"
+    return f"{host}:{port}"
 
 
 def _configure_http_transport(
@@ -384,18 +413,24 @@ def _configure_http_transport(
     host: str,
     port: int,
     allowed_origins_arg: Optional[str],
+    allowed_hosts_arg: Optional[str] = None,
 ) -> None:
     """Configure FastMCP `server.settings` for streamable-http transport.
 
     Pure configuration step — does NOT call `server.run()`. Extracted from
     `_run_http_transport` so unit tests can exercise allowlist derivation,
     warning emission, and TransportSecuritySettings shape without binding
-    a socket. Codex round-2 High-1 + MCP Streamable HTTP spec.
+    a socket. Codex round-2 High-1 + MCP Streamable HTTP spec; Codex
+    code-time Med-2 added `--allowed-hosts` so LAN clients with Host
+    headers carrying their actual IP can reach the server when
+    `--host 0.0.0.0` is in use.
     """
     from mcp.server.transport_security import TransportSecuritySettings
 
+    authority = _host_to_url_authority(host, port)
+
     if allowed_origins_arg is None:
-        origins = [f"http://{host}:{port}"]
+        origins = [f"http://{authority}"]
         if host == "127.0.0.1":
             origins.extend([f"http://localhost:{port}", f"http://[::1]:{port}"])
         protection_enabled = True
@@ -424,18 +459,37 @@ def _configure_http_transport(
             "access explicitly.",
             err=True,
         )
+        # Code-time Codex Med-2: LAN clients send `Host: <actual-ip>:<port>`,
+        # not `Host: 0.0.0.0:<port>`. The auto-derived allowed_hosts entry
+        # won't match. Surface the gap if the user hasn't passed
+        # --allowed-hosts to expand the allowlist explicitly.
+        if allowed_hosts_arg is None and protection_enabled:
+            typer.echo(
+                "warning: --host 0.0.0.0 binds all interfaces, but the auto-derived "
+                "Host-header allowlist only includes the bind address. LAN clients "
+                "with Host headers carrying their actual IP/hostname will be rejected "
+                "(HTTP 421). Pass --allowed-hosts 'ip1:port,hostname:port' to expand "
+                "the allowlist, or use --host <specific-ip> instead of 0.0.0.0.",
+                err=True,
+            )
 
     server.settings.host = host
     server.settings.port = port
-    # `allowed_hosts` matches the request's Host header which includes the
-    # port — `f"{host}:{port}"` is the specific bind. For loopback, also
-    # include the synonyms so curl-with-`Host: localhost:{port}` works.
-    if protection_enabled:
-        allowed_hosts = [f"{host}:{port}"]
+
+    # `allowed_hosts` matches the request's Host header which includes
+    # the port. For loopback, include the IPv4 + IPv6 synonyms so curl
+    # with any loopback-named Host works.
+    if not protection_enabled:
+        allowed_hosts: list[str] = []
+    elif allowed_hosts_arg is None or allowed_hosts_arg == "":
+        # auto-derive
+        allowed_hosts = [authority]
         if host == "127.0.0.1":
             allowed_hosts.extend([f"localhost:{port}", f"[::1]:{port}"])
     else:
-        allowed_hosts = []
+        allowed_hosts = [
+            h.strip() for h in allowed_hosts_arg.split(",") if h.strip()
+        ]
     server.settings.transport_security = TransportSecuritySettings(
         enable_dns_rebinding_protection=protection_enabled,
         allowed_hosts=allowed_hosts,
@@ -520,6 +574,7 @@ def _run_http_transport(
     host: str,
     port: int,
     allowed_origins_arg: Optional[str],
+    allowed_hosts_arg: Optional[str] = None,
 ) -> None:
     """Configure + run FastMCP streamable-http.
 
@@ -528,7 +583,11 @@ def _run_http_transport(
     per code-time Codex review).
     """
     _configure_http_transport(
-        server, host=host, port=port, allowed_origins_arg=allowed_origins_arg
+        server,
+        host=host,
+        port=port,
+        allowed_origins_arg=allowed_origins_arg,
+        allowed_hosts_arg=allowed_hosts_arg,
     )
     _probe_bind_or_exit(host, port)
     server.run(transport="streamable-http")

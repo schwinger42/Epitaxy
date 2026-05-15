@@ -112,6 +112,7 @@ $ epi mcp serve [OPTIONS]
 | `--host STR` | string | `127.0.0.1` | Bind host for `--transport http`. Loopback only by default — pass `0.0.0.0` for LAN exposure (emits an unauthenticated-exposure warning). Ignored when `--transport stdio`. |
 | `--port INT` | int | `7321` | Bind port for `--transport http`. Arbitrary high port; no MCP-standard HTTP port exists. Ignored when `--transport stdio`. |
 | `--allowed-origins STR` | string | (auto) | Comma-separated `Origin` allowlist for HTTP DNS-rebinding protection. Default auto-derives from `--host` + `--port` (loopback variants when host is `127.0.0.1`). Pass `""` to disable protection — NOT recommended; emits a stderr warning. |
+| `--allowed-hosts STR` | string | (auto) | Comma-separated `Host`-header allowlist for HTTP DNS-rebinding protection. Default auto-derives from `--host` + `--port` (loopback variants when host is `127.0.0.1`). Required for LAN exposure with `--host 0.0.0.0` since real clients send `Host: <their-ip>:<port>`, not `Host: 0.0.0.0:<port>`; without it MCP middleware returns HTTP 421. |
 | `--index PATH` | string | `.epitaxy/index.json` | Path to the index. |
 | `--verbose / -v` / `--quiet / -q` | bool | `false` | Same conventions. |
 

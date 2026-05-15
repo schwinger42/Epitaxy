@@ -18,7 +18,11 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from epitaxy.cli.app import _configure_http_transport, app
+from epitaxy.cli.app import (
+    _configure_http_transport,
+    _host_to_url_authority,
+    app,
+)
 from epitaxy.mcp_server import build_server
 
 
@@ -132,6 +136,105 @@ def test_empty_allowed_origins_disables_protection_with_warning(
     assert ts.allowed_origins == []
     err = capsys.readouterr().err
     assert "DISABLES DNS-rebinding protection" in err
+
+
+# --------------------------------------------------------------------------- #
+# Code-time Low-1: IPv6 bracket helper                                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_host_to_url_authority_ipv4() -> None:
+    assert _host_to_url_authority("127.0.0.1", 7321) == "127.0.0.1:7321"
+
+
+def test_host_to_url_authority_hostname() -> None:
+    assert _host_to_url_authority("localhost", 7321) == "localhost:7321"
+
+
+def test_host_to_url_authority_ipv6_brackets() -> None:
+    """Code-time Low-1: raw IPv6 host needs brackets in URL/Host syntax."""
+    assert _host_to_url_authority("::1", 7321) == "[::1]:7321"
+    assert _host_to_url_authority("2001:db8::1", 8080) == "[2001:db8::1]:8080"
+
+
+def test_host_to_url_authority_already_bracketed_passes_through() -> None:
+    """If caller already pre-bracketed, don't double-bracket."""
+    assert _host_to_url_authority("[::1]", 7321) == "[::1]:7321"
+
+
+def test_ipv6_host_produces_bracketed_allowed_hosts_and_origins(server) -> None:
+    """IPv6 --host ::1 must emit `[::1]:port` everywhere URL/Host syntax applies."""
+    _configure_http_transport(
+        server, host="::1", port=7321, allowed_origins_arg=None
+    )
+    ts = server.settings.transport_security
+    assert "[::1]:7321" in ts.allowed_hosts
+    assert "http://[::1]:7321" in ts.allowed_origins
+    # Negative: bare ::1:7321 must not appear
+    assert "::1:7321" not in ts.allowed_hosts
+    assert "http://::1:7321" not in ts.allowed_origins
+
+
+# --------------------------------------------------------------------------- #
+# Code-time Med-2: --allowed-hosts flag for LAN exposure                      #
+# --------------------------------------------------------------------------- #
+
+
+def test_custom_allowed_hosts_replaces_auto_derive(server) -> None:
+    _configure_http_transport(
+        server,
+        host="0.0.0.0",
+        port=7321,
+        allowed_origins_arg="http://192.168.1.5:7321",
+        allowed_hosts_arg="192.168.1.5:7321,server.local:7321",
+    )
+    ts = server.settings.transport_security
+    assert ts.allowed_hosts == ["192.168.1.5:7321", "server.local:7321"]
+    assert ts.allowed_origins == ["http://192.168.1.5:7321"]
+
+
+def test_custom_allowed_hosts_whitespace_stripped(server) -> None:
+    _configure_http_transport(
+        server,
+        host="0.0.0.0",
+        port=7321,
+        allowed_origins_arg="http://a.com",
+        allowed_hosts_arg=" a.com:7321 , b.com:7321 ",
+    )
+    ts = server.settings.transport_security
+    assert ts.allowed_hosts == ["a.com:7321", "b.com:7321"]
+
+
+def test_non_loopback_bind_without_allowed_hosts_emits_warning(
+    server, capsys
+) -> None:
+    """Code-time Med-2: --host 0.0.0.0 with auto-derived hosts blocks LAN."""
+    _configure_http_transport(
+        server, host="0.0.0.0", port=7321, allowed_origins_arg=None
+    )
+    err = capsys.readouterr().err
+    assert "--host 0.0.0.0 binds all interfaces" in err
+    assert "--allowed-hosts" in err
+    assert "HTTP 421" in err
+
+
+def test_non_loopback_bind_with_explicit_allowed_hosts_no_lan_warning(
+    server, capsys
+) -> None:
+    """User-provided --allowed-hosts means they took responsibility."""
+    _configure_http_transport(
+        server,
+        host="0.0.0.0",
+        port=7321,
+        allowed_origins_arg="http://192.168.1.5:7321",
+        allowed_hosts_arg="192.168.1.5:7321",
+    )
+    err = capsys.readouterr().err
+    # The general non-loopback exposure warning still fires (HTTP is
+    # unauthenticated), but the LAN-host-allowlist-gap warning should NOT.
+    assert "unauthenticated" in err
+    assert "blocks LAN" not in err
+    assert "--host 0.0.0.0 binds all interfaces" not in err
 
 
 # --------------------------------------------------------------------------- #
