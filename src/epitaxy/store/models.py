@@ -2,10 +2,11 @@
 
 See docs/SCHEMA.md §2 (nodes), §3 (edges), §5 (index envelope).
 
-PR1 scope (tracer-bullet): only `module` and `function` node types; only
-`depends-on` edges are emitted by the parser, but `references` and
-`supersedes` are valid Edge.type values so PR2 can add them without a
-model migration.
+PR2 scope (doc-parsing): adds `adr` + `plan` node types; the
+`references` + `supersedes` Edge.type literals (reserved in PR1) are
+now populated by the parser. `parameter` node type + `decides` edge
+type remain deferred to PR4 alongside `--parameters` extraction —
+keeping the surface narrow per Codex round-1 High-2.
 """
 
 from __future__ import annotations
@@ -47,7 +48,45 @@ class FunctionNode(BaseModel):
     provenance: str
 
 
-Node = Annotated[Union[ModuleNode, FunctionNode], Field(discriminator="type")]
+class AdrNode(BaseModel):
+    """An Architecture Decision Record. See SCHEMA.md §2.3.
+
+    `decides` is intentionally absent — PR2 parser ignores it per the
+    Codex round-1 High-2 deferral; PR4 will add the field alongside
+    `ParameterNode` and the `decides` edge type.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["adr"] = "adr"
+    id: str
+    path: str
+    title: str
+    status: str | None = None
+    date: str | None = None
+    supersedes: str | None = None
+    summary: str | None = None
+    provenance: str
+
+
+class PlanNode(BaseModel):
+    """A plan markdown document. See SCHEMA.md §2.4."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["plan"] = "plan"
+    id: str
+    path: str
+    title: str
+    status: str | None = None
+    summary: str | None = None
+    provenance: str
+
+
+Node = Annotated[
+    Union[ModuleNode, FunctionNode, AdrNode, PlanNode],
+    Field(discriminator="type"),
+]
 
 
 class Edge(BaseModel):
