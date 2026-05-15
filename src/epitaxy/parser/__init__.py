@@ -8,5 +8,12 @@ POR docstring frontmatter (parser/por.py); references-edge final pass
 
 from .markdown import parse_markdown
 from .python import ParseError, parse_repo
+from .refs import BodyRecord, extract_references
 
-__all__ = ["ParseError", "parse_markdown", "parse_repo"]
+__all__ = [
+    "BodyRecord",
+    "ParseError",
+    "extract_references",
+    "parse_markdown",
+    "parse_repo",
+]

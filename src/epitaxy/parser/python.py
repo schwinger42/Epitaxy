@@ -31,6 +31,7 @@ from pathlib import Path
 
 from ..store.models import Edge, FunctionNode, ModuleNode, Node
 from .por import PORParseError, parse_docstring as parse_por_docstring
+from .refs import BodyRecord
 
 
 @dataclass(frozen=True)
@@ -181,7 +182,7 @@ def parse_repo(
     *,
     package_roots: list[str] | None = None,
     extracted_at: datetime | None = None,
-) -> tuple[list[Node], list[Edge], list[ParseError]]:
+) -> tuple[list[Node], list[Edge], list[ParseError], list[BodyRecord]]:
     """Parse a set of Python files into intent-graph nodes + edges + parse errors.
 
     `py_files` are absolute paths under `repo_root`. Glob expansion and exclude
@@ -194,6 +195,11 @@ def parse_repo(
     Files that fail to AST-parse are skipped and surfaced in the returned
     `list[ParseError]` so the CLI can exit 3 per CLI.md §7 (Codex review
     Medium-4).
+
+    PR2: returns a 4th element — `list[BodyRecord]` accumulating
+    post-frontmatter docstring bodies for the references-edge final pass
+    (parser/refs.py). One record per module/function with a non-empty
+    docstring body.
     """
     extracted_at = extracted_at or datetime.now(timezone.utc)
     roots = list(package_roots or [])
@@ -220,6 +226,7 @@ def parse_repo(
 
     nodes: list[Node] = []
     edges: list[Edge] = []
+    body_records: list[BodyRecord] = []
     seen_edges: set[tuple[str, str, str]] = set()
     all_function_ids: set[str] = set()
     per_module: list[dict] = []
@@ -231,10 +238,12 @@ def parse_repo(
 
         # POR docstring frontmatter for the module
         mod_raw_doc = ast.get_docstring(tree)
+        mod_doc_body: str | None = None  # post-frontmatter body for refs pass
         try:
             mod_por_result = parse_por_docstring(mod_raw_doc)
             mod_por = mod_por_result.por
             mod_doc = _first_paragraph(mod_por_result.body)
+            mod_doc_body = mod_por_result.body
         except PORParseError as e:
             errors.append(
                 ParseError(
@@ -244,6 +253,7 @@ def parse_repo(
             )
             mod_por = None
             mod_doc = _first_paragraph(mod_raw_doc)
+            mod_doc_body = mod_raw_doc
 
         nodes.append(
             ModuleNode(
@@ -256,15 +266,32 @@ def parse_repo(
             )
         )
 
+        if mod_doc_body and mod_doc_body.strip():
+            # body_start_line is approximate: module docstring lives at top
+            # of file; the body proper begins on line 2+ depending on
+            # frontmatter length. Best-effort attribution; line precision
+            # within a docstring is PR3+ territory.
+            body_records.append(
+                BodyRecord(
+                    body_text=mod_doc_body,
+                    source_node_id=mod_id,
+                    source_path=rel_path,
+                    body_start_line=1,
+                    source_kind="docstring",
+                )
+            )
+
         functions: dict[str, FuncDef] = {}
         for qn, fdef, line in _walk_functions(tree):
             fid = function_id(rel_path, qn)
 
             fn_raw_doc = ast.get_docstring(fdef)
+            fn_doc_body: str | None = None
             try:
                 fn_por_result = parse_por_docstring(fn_raw_doc)
                 fn_por = fn_por_result.por
                 fn_doc = _first_paragraph(fn_por_result.body)
+                fn_doc_body = fn_por_result.body
             except PORParseError as e:
                 errors.append(
                     ParseError(
@@ -274,6 +301,7 @@ def parse_repo(
                 )
                 fn_por = None
                 fn_doc = _first_paragraph(fn_raw_doc)
+                fn_doc_body = fn_raw_doc
 
             nodes.append(
                 FunctionNode(
@@ -290,6 +318,17 @@ def parse_repo(
             )
             functions[qn] = fdef
             all_function_ids.add(fid)
+
+            if fn_doc_body and fn_doc_body.strip():
+                body_records.append(
+                    BodyRecord(
+                        body_text=fn_doc_body,
+                        source_node_id=fid,
+                        source_path=rel_path,
+                        body_start_line=line,
+                        source_kind="docstring",
+                    )
+                )
 
         imports: dict[str, str] = {}
         for stmt in tree.body:
@@ -373,4 +412,4 @@ def parse_repo(
                 )
                 seen_edges.add(edge_key)
 
-    return nodes, edges, errors
+    return nodes, edges, errors, body_records

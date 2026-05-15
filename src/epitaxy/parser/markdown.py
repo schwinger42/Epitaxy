@@ -27,29 +27,38 @@ import yaml
 
 from ..store.models import AdrNode, Edge, Node, PlanNode
 from .python import ParseError
+from .refs import BodyRecord
 
 # --------------------------------------------------------------------------- #
 # Frontmatter + body splitting                                                #
 # --------------------------------------------------------------------------- #
 
 
-def _split_frontmatter(text: str) -> tuple[str | None, str]:
-    """Return (frontmatter_yaml, body). If no frontmatter, returns (None, text).
+def _split_frontmatter(text: str) -> tuple[str | None, str, int]:
+    """Return (frontmatter_yaml, body, body_start_line).
+
+    If no frontmatter, returns (None, text, 1) — body is the whole text starting
+    at file line 1.
 
     Frontmatter is delimited by `---` on its own line at the file start and a
     second `---` on its own line. Both delimiters must be at column 0.
+
+    `body_start_line` is the 1-based file line where `body` begins. Used by
+    parser/refs.py to attribute markdown-link references to source lines.
     """
     lines = text.split("\n")
     if not lines or lines[0].strip() != "---":
-        return None, text
+        return None, text, 1
     for idx in range(1, len(lines)):
         if lines[idx].strip() == "---":
             fm = "\n".join(lines[1:idx])
             body = "\n".join(lines[idx + 1 :])
-            return fm, body
+            # closing --- at 0-indexed `idx` is on 1-based line idx+1; body
+            # starts on the next line.
+            return fm, body, idx + 2
     # No closing --- — treat as no frontmatter (lenient on malformed-structure;
     # YAML-level malformation is still a hard error when frontmatter IS closed).
-    return None, text
+    return None, text, 1
 
 
 def _split_first_h1(body: str) -> tuple[str | None, str]:
@@ -131,15 +140,18 @@ def _parse_frontmatter_dict(frontmatter: str | None) -> dict:
 
 def _parse_adr_file(
     abs_path: Path, repo_root: Path
-) -> tuple[AdrNode, Edge | None]:
-    """Parse one ADR markdown file. Raises _MarkdownParseError on hard failure."""
+) -> tuple[AdrNode, Edge | None, BodyRecord | None]:
+    """Parse one ADR markdown file. Raises _MarkdownParseError on hard failure.
+
+    Returns (AdrNode, supersedes_edge_or_None, body_record_or_None).
+    """
     try:
         text = abs_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as e:
         raise _MarkdownParseError(f"UnicodeDecodeError: {e}") from e
 
     rel_path = str(abs_path.relative_to(repo_root)).replace("\\", "/")
-    frontmatter, body = _split_frontmatter(text)
+    frontmatter, body, body_start_line = _split_frontmatter(text)
     fm = _parse_frontmatter_dict(frontmatter)
 
     # title: frontmatter > first H1 > filename stem
@@ -183,10 +195,23 @@ def _parse_adr_file(
         summary=summary,
         provenance="frontmatter+body",
     )
-    return node, supersedes_edge
+
+    body_record: BodyRecord | None = None
+    if body and body.strip():
+        body_record = BodyRecord(
+            body_text=body,
+            source_node_id=node.id,
+            source_path=rel_path,
+            body_start_line=body_start_line,
+            source_kind="adr-body",
+        )
+
+    return node, supersedes_edge, body_record
 
 
-def _parse_plan_file(abs_path: Path, repo_root: Path) -> PlanNode:
+def _parse_plan_file(
+    abs_path: Path, repo_root: Path
+) -> tuple[PlanNode, BodyRecord | None]:
     """Parse one plan markdown file. Raises _MarkdownParseError on hard failure."""
     try:
         text = abs_path.read_text(encoding="utf-8")
@@ -194,7 +219,7 @@ def _parse_plan_file(abs_path: Path, repo_root: Path) -> PlanNode:
         raise _MarkdownParseError(f"UnicodeDecodeError: {e}") from e
 
     rel_path = str(abs_path.relative_to(repo_root)).replace("\\", "/")
-    frontmatter, body = _split_frontmatter(text)
+    frontmatter, body, body_start_line = _split_frontmatter(text)
     fm = _parse_frontmatter_dict(frontmatter)
 
     title_raw = fm.get("title")
@@ -205,7 +230,7 @@ def _parse_plan_file(abs_path: Path, repo_root: Path) -> PlanNode:
 
     summary = _first_paragraph(body_after_h1 if h1 is not None else body)
 
-    return PlanNode(
+    node = PlanNode(
         id=f"plan:{rel_path}",
         path=rel_path,
         title=title,
@@ -213,6 +238,18 @@ def _parse_plan_file(abs_path: Path, repo_root: Path) -> PlanNode:
         summary=summary,
         provenance="body",
     )
+
+    body_record: BodyRecord | None = None
+    if body and body.strip():
+        body_record = BodyRecord(
+            body_text=body,
+            source_node_id=node.id,
+            source_path=rel_path,
+            body_start_line=body_start_line,
+            source_kind="plan-body",
+        )
+
+    return node, body_record
 
 
 # --------------------------------------------------------------------------- #
@@ -225,15 +262,20 @@ def parse_markdown(
     *,
     adr_dir: str = "decisions/",
     plan_dir: str = "docs/plans/",
-) -> tuple[list[Node], list[Edge], list[ParseError]]:
+) -> tuple[list[Node], list[Edge], list[ParseError], list[BodyRecord]]:
     """Scan adr_dir + plan_dir under repo_root → ADR/plan nodes + supersedes edges.
 
     Per CLI.md §7 exit codes: per-file errors are collected, not raised, so the
     caller can still write a partial index and exit 3.
+
+    PR2: returns a 4th element — `list[BodyRecord]` accumulating ADR + plan
+    body texts (post-frontmatter) for the references-edge final pass in
+    parser/refs.py.
     """
     nodes: list[Node] = []
     edges: list[Edge] = []
     errors: list[ParseError] = []
+    body_records: list[BodyRecord] = []
 
     adr_root = repo_root / adr_dir
     if adr_root.is_dir():
@@ -241,13 +283,17 @@ def parse_markdown(
             if not md_path.is_file():
                 continue
             try:
-                adr_node, supersedes_edge = _parse_adr_file(md_path, repo_root)
+                adr_node, supersedes_edge, body_record = _parse_adr_file(
+                    md_path, repo_root
+                )
             except _MarkdownParseError as e:
                 errors.append(ParseError(path=md_path, reason=e.reason))
                 continue
             nodes.append(adr_node)
             if supersedes_edge is not None:
                 edges.append(supersedes_edge)
+            if body_record is not None:
+                body_records.append(body_record)
 
     plan_root = repo_root / plan_dir
     if plan_root.is_dir():
@@ -255,10 +301,12 @@ def parse_markdown(
             if not md_path.is_file():
                 continue
             try:
-                plan_node = _parse_plan_file(md_path, repo_root)
+                plan_node, body_record = _parse_plan_file(md_path, repo_root)
             except _MarkdownParseError as e:
                 errors.append(ParseError(path=md_path, reason=e.reason))
                 continue
             nodes.append(plan_node)
+            if body_record is not None:
+                body_records.append(body_record)
 
-    return nodes, edges, errors
+    return nodes, edges, errors, body_records

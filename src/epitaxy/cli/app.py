@@ -14,7 +14,7 @@ from typing import Optional
 import typer
 
 from epitaxy import __version__
-from epitaxy.parser import parse_repo
+from epitaxy.parser import extract_references, parse_markdown, parse_repo
 from epitaxy.store import Index, IndexConfig, IndexStats, write_index
 
 
@@ -182,9 +182,26 @@ def sync(
             err=True,
         )
 
-    nodes, edges, parse_errors = parse_repo(
+    py_nodes, py_edges, py_errors, py_bodies = parse_repo(
         repo_root, py_files, package_roots=package_roots
     )
+    md_nodes, md_edges, md_errors, md_bodies = parse_markdown(
+        repo_root, adr_dir=config.adr_dir, plan_dir=config.plan_dir
+    )
+
+    nodes = [*py_nodes, *md_nodes]
+    edges = [*py_edges, *md_edges]
+    parse_errors = [*py_errors, *md_errors]
+
+    # Final pass: references edges from markdown links in docstring + ADR/plan
+    # bodies, resolved against the union of all emitted nodes. Per Codex
+    # round-1 High-1, this MUST run last so docstring→ADR / ADR→plan links
+    # resolve. Per Codex round-2 High-2, the target index includes adr/plan
+    # node IDs, not just module/function.
+    ref_edges = extract_references(
+        repo_root, nodes, [*py_bodies, *md_bodies]
+    )
+    edges.extend(ref_edges)
 
     for err in parse_errors:
         typer.echo(f"warning: failed to parse {err.path}: {err.reason}", err=True)
@@ -192,6 +209,8 @@ def sync(
     stats = IndexStats(
         modules=sum(1 for n in nodes if n.type == "module"),
         functions=sum(1 for n in nodes if n.type == "function"),
+        adrs=sum(1 for n in nodes if n.type == "adr"),
+        plans=sum(1 for n in nodes if n.type == "plan"),
         edges=len(edges),
     )
 
@@ -223,7 +242,8 @@ def sync(
     if not quiet:
         typer.echo(
             f"wrote {out_path} "
-            f"({stats.modules} modules, {stats.functions} functions, {stats.edges} edges)",
+            f"({stats.modules} modules, {stats.functions} functions, "
+            f"{stats.adrs} ADRs, {stats.plans} plans, {stats.edges} edges)",
             err=True,
         )
 

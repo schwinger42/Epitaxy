@@ -19,7 +19,7 @@ def _collect_py(root: Path) -> list[Path]:
 
 @pytest.fixture(scope="module")
 def parsed():
-    nodes, edges, errors = parse_repo(
+    nodes, edges, errors, _bodies = parse_repo(
         FIXTURE, _collect_py(FIXTURE), package_roots=PACKAGE_ROOTS
     )
     return nodes, edges, errors
@@ -160,7 +160,7 @@ def test_src_layout_import_resolves_via_package_roots(tmp_path: Path) -> None:
     )
 
     files = sorted(repo.glob("src/**/*.py"))
-    nodes, edges, errors = parse_repo(repo, files, package_roots=["src/"])
+    nodes, edges, errors, _bodies = parse_repo(repo, files, package_roots=["src/"])
 
     assert errors == []
     call_edges = [(e.from_, e.to) for e in edges if e.source == "call"]
@@ -194,7 +194,7 @@ def test_syntax_error_file_returned_as_parse_error_not_raised(tmp_path: Path) ->
     (repo / "src" / "pkg" / "bad.py").write_text("def broken(:  # syntax error\n")
 
     files = sorted(repo.glob("src/**/*.py"))
-    nodes, _edges, errors = parse_repo(repo, files, package_roots=["src/"])
+    nodes, _edges, errors, _ = parse_repo(repo, files, package_roots=["src/"])
 
     # Index still gets a node for the good file
     assert any(n.id == "module:src/pkg/ok.py" for n in nodes)

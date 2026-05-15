@@ -38,7 +38,7 @@ Bumps rank from 64 to 128 to give headroom on long-tail items.
 """,
     )
 
-    nodes, edges, errors = parse_markdown(tmp_path)
+    nodes, edges, errors, _bodies = parse_markdown(tmp_path)
 
     assert errors == []
     assert len(nodes) == 1
@@ -67,7 +67,7 @@ def test_adr_no_frontmatter_uses_h1_as_title(tmp_path: Path) -> None:
         tmp_path / "decisions" / "minimal.md",
         "# Minimal ADR\n\nNo frontmatter at all.",
     )
-    nodes, edges, errors = parse_markdown(tmp_path)
+    nodes, edges, errors, _bodies = parse_markdown(tmp_path)
     assert errors == [] and edges == [] and len(nodes) == 1
     assert nodes[0].title == "Minimal ADR"
     assert nodes[0].status is None
@@ -76,7 +76,7 @@ def test_adr_no_frontmatter_uses_h1_as_title(tmp_path: Path) -> None:
 
 def test_adr_no_frontmatter_no_h1_uses_filename(tmp_path: Path) -> None:
     _write(tmp_path / "decisions" / "bare-stem.md", "No structure here.")
-    nodes, _, errors = parse_markdown(tmp_path)
+    nodes, _, errors, _ = parse_markdown(tmp_path)
     assert errors == [] and nodes[0].title == "bare-stem"
 
 
@@ -86,7 +86,7 @@ def test_adr_yaml_date_coerced_to_iso_string(tmp_path: Path) -> None:
         tmp_path / "decisions" / "date.md",
         "---\ntitle: t\ndate: 2026-04-12\n---\n# t",
     )
-    nodes, _, _ = parse_markdown(tmp_path)
+    nodes, _, _, _ = parse_markdown(tmp_path)
     assert nodes[0].date == "2026-04-12"
     assert isinstance(nodes[0].date, str)
 
@@ -102,7 +102,7 @@ def test_supersedes_edge_emitted_even_when_target_absent(tmp_path: Path) -> None
         tmp_path / "decisions" / "current.md",
         "---\ntitle: current\nsupersedes: adr:decisions/historical-gone.md\n---\n# current",
     )
-    nodes, edges, errors = parse_markdown(tmp_path)
+    nodes, edges, errors, _bodies = parse_markdown(tmp_path)
 
     assert errors == []
     assert len(edges) == 1
@@ -115,7 +115,7 @@ def test_supersedes_bare_path_normalized_to_adr_prefix(tmp_path: Path) -> None:
         tmp_path / "decisions" / "current.md",
         "---\ntitle: t\nsupersedes: decisions/old.md\n---\n# t",
     )
-    nodes, edges, _ = parse_markdown(tmp_path)
+    nodes, edges, _, _ = parse_markdown(tmp_path)
     assert edges[0].to == "adr:decisions/old.md"
     assert nodes[0].supersedes == "adr:decisions/old.md"
 
@@ -130,7 +130,7 @@ def test_malformed_yaml_frontmatter_emits_parse_error(tmp_path: Path) -> None:
         tmp_path / "decisions" / "broken.md",
         "---\ntitle: [unclosed\nstatus: accepted\n---\n# t",
     )
-    nodes, edges, errors = parse_markdown(tmp_path)
+    nodes, edges, errors, _bodies = parse_markdown(tmp_path)
     assert nodes == [] and edges == []
     assert len(errors) == 1
     assert "malformed YAML frontmatter" in errors[0].reason
@@ -141,7 +141,7 @@ def test_supersedes_non_string_value_emits_parse_error(tmp_path: Path) -> None:
         tmp_path / "decisions" / "wrong_type.md",
         "---\ntitle: t\nsupersedes:\n  - one\n  - two\n---\n# t",
     )
-    nodes, edges, errors = parse_markdown(tmp_path)
+    nodes, edges, errors, _bodies = parse_markdown(tmp_path)
     assert nodes == [] and edges == []
     assert len(errors) == 1
     assert "supersedes value must be a string" in errors[0].reason
@@ -153,7 +153,7 @@ def test_yaml_frontmatter_not_a_mapping_emits_parse_error(tmp_path: Path) -> Non
         tmp_path / "decisions" / "list.md",
         "---\n- not\n- a\n- mapping\n---\n# t",
     )
-    _, _, errors = parse_markdown(tmp_path)
+    _, _, errors, _ = parse_markdown(tmp_path)
     assert len(errors) == 1
     assert "must be a mapping" in errors[0].reason
 
@@ -165,7 +165,7 @@ def test_partial_failure_other_files_still_parsed(tmp_path: Path) -> None:
         tmp_path / "decisions" / "broken.md",
         "---\n[unclosed\n---\n# x",
     )
-    nodes, _, errors = parse_markdown(tmp_path)
+    nodes, _, errors, _ = parse_markdown(tmp_path)
     assert len(nodes) == 1 and len(errors) == 1
     assert nodes[0].title == "good"
 
@@ -180,7 +180,7 @@ def test_plan_h1_and_summary(tmp_path: Path) -> None:
         tmp_path / "docs" / "plans" / "q2-launch.md",
         "---\nstatus: in-progress\n---\n\n# Q2 ranker launch\n\nShip ALS by Q2 end.",
     )
-    nodes, edges, errors = parse_markdown(tmp_path)
+    nodes, edges, errors, _bodies = parse_markdown(tmp_path)
     assert errors == [] and edges == [] and len(nodes) == 1
     plan = nodes[0]
     assert isinstance(plan, PlanNode)
@@ -196,7 +196,7 @@ def test_plan_with_no_frontmatter(tmp_path: Path) -> None:
         tmp_path / "docs" / "plans" / "loose.md",
         "# Loose plan\n\nNo frontmatter.",
     )
-    nodes, _, errors = parse_markdown(tmp_path)
+    nodes, _, errors, _ = parse_markdown(tmp_path)
     assert errors == [] and nodes[0].title == "Loose plan"
 
 
@@ -207,21 +207,21 @@ def test_plan_with_no_frontmatter(tmp_path: Path) -> None:
 
 def test_missing_dirs_emit_no_errors(tmp_path: Path) -> None:
     """A repo without decisions/ or docs/plans/ is valid — silent skip."""
-    nodes, edges, errors = parse_markdown(tmp_path)
+    nodes, edges, errors, _bodies = parse_markdown(tmp_path)
     assert nodes == [] and edges == [] and errors == []
 
 
 def test_custom_dirs_honored(tmp_path: Path) -> None:
     _write(tmp_path / "adrs" / "a.md", "# A")
     _write(tmp_path / "plans" / "p.md", "# P")
-    nodes, _, _ = parse_markdown(tmp_path, adr_dir="adrs/", plan_dir="plans/")
+    nodes, _, _, _ = parse_markdown(tmp_path, adr_dir="adrs/", plan_dir="plans/")
     ids = sorted(n.id for n in nodes)
     assert ids == ["adr:adrs/a.md", "plan:plans/p.md"]
 
 
 def test_nested_md_files_discovered(tmp_path: Path) -> None:
     _write(tmp_path / "decisions" / "sub" / "nested.md", "# Nested")
-    nodes, _, _ = parse_markdown(tmp_path)
+    nodes, _, _, _ = parse_markdown(tmp_path)
     assert len(nodes) == 1 and nodes[0].path == "decisions/sub/nested.md"
 
 
@@ -231,7 +231,7 @@ def test_decides_field_ignored_in_pr2(tmp_path: Path) -> None:
         tmp_path / "decisions" / "with-decides.md",
         "---\ntitle: t\ndecides:\n  - param:src/m.py::foo::rank\n---\n# t",
     )
-    nodes, edges, errors = parse_markdown(tmp_path)
+    nodes, edges, errors, _bodies = parse_markdown(tmp_path)
     assert errors == [] and edges == [] and len(nodes) == 1
     # decides is not on AdrNode at all in PR2 — model would have rejected
     # the field on construction if it were declared
@@ -243,5 +243,5 @@ def test_unicode_paths_and_titles(tmp_path: Path) -> None:
         tmp_path / "decisions" / "中文.md",
         "---\ntitle: 中文標題\n---\n# 中文",
     )
-    nodes, _, _ = parse_markdown(tmp_path)
+    nodes, _, _, _ = parse_markdown(tmp_path)
     assert nodes[0].title == "中文標題"
