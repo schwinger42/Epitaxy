@@ -10,28 +10,32 @@ Public repo: https://github.com/schwinger42/Epitaxy
 
 ## Status
 
-🚀 **PR1 (tracer-bullet) merged 2026-05-15**, version `0.1.0a1`. `epi sync` + `epi serve` + `epi mcp serve` functional end-to-end on Python repos. SCHEMA subset only: `module`/`function` nodes + `depends-on` edges (2 of 4 default node types, 1 of 3 default edge types). ADR/plan parsing, POR docstring frontmatter, parameter extraction, MCP HTTP transport all **fail-fast** (not silent no-op) and tracked for PR2/PR4. 48 tests, 87% coverage.
+🚀 **PR1 + PR2 + PR3 merged** through 2026-05-16. Version `0.1.0`, `Development Status :: 2 - Pre-Alpha`. **156 tests pass + 1 xfail, 91% coverage.**
 
-**Active: PR2** — ADR + plan markdown parsing + POR docstring frontmatter. Closes the doc-parsing gap so v0 SCHEMA-default-conformance is real. After PR2: version `0.1.0a1` → `0.1.0`, classifier `1 - Planning` → `2 - Pre-Alpha`.
+- **PR1 tracer-bullet** (`54542c4`): `epi sync` + `epi serve` + `epi mcp serve` — Python AST → `module`/`function` nodes + `depends-on` edges; stdio MCP transport only.
+- **PR2 doc-parsing** (`5228c07`): adds `adr`+`plan` nodes + `references`+`supersedes` edges + POR YAML docstring frontmatter. Default-emit subset complete (4/4 node types, 3/3 edge types).
+- **PR3 HTTP transport + Progressive-Enhancement HTML** (`a7a47ce`): `epi mcp serve --transport http` with DNS-rebinding protection (`TransportSecuritySettings`, `--host` + `--allowed-origins` + `--allowed-hosts` flags); semantic HTML for `epi serve` with `<details>` drill-down, inline CSS, ~8-line auto-open JS island, dark-mode via `prefers-color-scheme`. SCHEMA §6 dangling-target rule honored end-to-end (PR2 parser + PR3 renderer).
+
+**Active: PR4 — `--parameters` + `ParameterNode` + `decides` edge + real `por_trace`.** Final v0 piece. Closes the opt-in `--parameters` fail-fast + the `por_trace` MCP stub. After PR4: v0 surface is feature-complete per SCHEMA §1.2 (5 emitted node types + 4 edge types; only `data_asset` + `decision` remain v1+ reserved). No version bump (stays `0.1.0`).
 
 Detail: [docs/ROADMAP.md](docs/ROADMAP.md) · specs: [docs/SCHEMA.md](docs/SCHEMA.md) · [docs/CLI.md](docs/CLI.md) · [docs/MCP.md](docs/MCP.md).
 
-## Layout (post-PR1)
+## Layout (post-PR3)
 
 ```
 ~/PycharmProjects/Epitaxy/
 ├── src/epitaxy/
-│   ├── parser/      # Python AST → POR data layer (PR1: module/function/depends-on; PR2: ADR/plan/POR/references/supersedes)
-│   ├── store/       # pydantic models + .epitaxy/index.json read/write
-│   ├── serve/       # `epi serve` drill-down (PR1: hash-based anchors, no client JS)
-│   ├── mcp_server/  # `epi mcp serve` — MCP tools por_explain / por_trace / por_lineage (PR1: stdio only; HTTP fail-fast tracked for PR3)
-│   └── cli/         # `epi sync`, `epi serve`, `epi mcp serve`
+│   ├── parser/      # python.py + markdown.py + por.py + refs.py (PR4 wires --parameters extraction + decides edges)
+│   ├── store/       # pydantic models + .epitaxy/index.json read/write (PR4 adds ParameterNode + AdrNode.decides + 'decides' Edge.type)
+│   ├── serve/       # `epi serve` semantic HTML drill-down + inline CSS + auto-open JS island (PR3)
+│   ├── mcp_server/  # `epi mcp serve` — por_explain / por_trace / por_lineage; stdio + streamable-http (PR3); PR4 wires real por_trace
+│   └── cli/         # `epi sync`, `epi serve`, `epi mcp serve` with --transport stdio|http + --host + --allowed-origins + --allowed-hosts (PR3)
 ├── docs/
 │   ├── ROADMAP.md   # v0 → v3 phasing
-│   ├── SCHEMA.md    # node/edge types + inline POR structure
+│   ├── SCHEMA.md    # node/edge types + inline POR structure (PR4 amends §2.5 + §6)
 │   ├── CLI.md       # `epi *` command contracts + exit codes
-│   └── MCP.md       # MCP tool contracts + transport wire format
-├── tests/           # 48 tests, 87% coverage as of PR1
+│   └── MCP.md       # MCP tool contracts + transport wire format (PR4 amends §3 TraceResult + Errors)
+├── tests/           # 156 tests, 91% coverage as of PR3
 ├── CLAUDE.md        # this file (project memory)
 ├── README.md
 └── pyproject.toml
@@ -51,19 +55,23 @@ Subpackages scaffolded by PR1 — extend in place per PR scope, don't reshape di
 
 ## Current focus
 
-**Active: PR2 — doc-parsing.** PR1 shipped the Python AST → index pipeline + drill-down + MCP stdio. PR2 closes the SCHEMA gap:
+**Active: PR4 — `--parameters` extraction + `ParameterNode` + `decides` + real `por_trace`.** Final v0 piece. After PR4, the v0 surface is genuinely feature-complete and a real v0.2 / v1 conversation (Pillar 1 Bootstrap, Pillar 2a in-session MCP prompts) can start.
 
-- Adds `adr` + `plan` node types ([SCHEMA §2.3 / §2.4](docs/SCHEMA.md#2-node-types))
-- Adds `references` + `supersedes` edge types ([SCHEMA §3](docs/SCHEMA.md#3-edge-types))
-- Adds POR YAML frontmatter recognition in module/function docstrings ([SCHEMA §4](docs/SCHEMA.md#4-inline-por-structure-optional))
-- Bumps `0.1.0a1` → `0.1.0` + `Development Status :: 2 - Pre-Alpha`
+What PR4 adds:
 
-Out of PR2 scope: HTTP MCP transport (PR3 alongside Progressive-Enhancement HTML for `epi serve`); parameter extraction + `ParameterNode` + `decides` edge (PR4); `data_asset` + real `por_lineage` (v1+).
+- **`ParameterNode` model** ([SCHEMA §2.5](docs/SCHEMA.md#25-parameter-opt-in---parameters)) — emits when `epi sync --parameters` OR `[tool.epitaxy].parameters_enabled = true`, via EITHER `# epitaxy:param` comment on the assignment line OR inclusion in an ADR's `decides:` frontmatter list (the SCHEMA §2.5 OR clause). Composite provenance `"ast+comment+adr-frontmatter"` when both signals are present.
+- **`decides` edge type** ([SCHEMA §3](docs/SCHEMA.md#3-edge-types)) — ADRs → parameters; gated on `parameters_enabled`. Dangling-target rule (same as `supersedes`): edge emitted even when target parameter is absent (drift signal). SCHEMA §6 amendment ships in this PR to explicitly bless it.
+- **`AdrNode.decides` field** ([SCHEMA §2.3](docs/SCHEMA.md#23-adr)) — populated from frontmatter regardless of `parameters_enabled` (the field is data; edge emission is gated).
+- **Real `por_trace` MCP tool** ([MCP §3](docs/MCP.md)) — returns `TraceResult` with `decision_chain` (newest-first via supersedes) + new `parallel_heads` field (when multiple active heads decide the same parameter) + new `notes` field (cycle-truncation + no-head warnings). MCP.md §3 schema + Errors table updated.
+- **CLI fail-fast removal** — `epi sync --parameters` becomes first-class. PR1-tracer-bullet error strings in `cli/app.py` and `mcp_server/tools.py` cleaned.
+- **3 PR2 lock-guard tests flip** — currently assert `ParameterNode` / `decides` / `AdrNode.decides` ABSENCE; flip to assert PRESENCE post-PR4. Become forward-compat regression guards.
 
-Pillar 3 (Consume) + Pillar 4 (Query), read-only on user repo. ~1 focused day for PR2 per [ROADMAP §3](docs/ROADMAP.md#3-phasing-v0--v3).
+Out of PR4 scope: `data_asset` node + `derives-from` edges, `decision` atomic sub-ADR nodes — both v1+.
+
+Plan: [~/.claude/plans/plan-quartz-cipher.md](~/.claude/plans/plan-quartz-cipher.md) — Codex-reviewed twice (12 + 7 = 19 findings folded; 3 user-product decisions resolved toward spec-faithful interpretation). ~1 focused day per [ROADMAP §3](docs/ROADMAP.md#3-phasing-v0--v3).
 
 ## Detail reference
 
 - [docs/ROADMAP.md](docs/ROADMAP.md) — 4 pillars in depth, v0 → v3 phasing with what-ships-per-phase, LLM-drafts safety design, positioning vs platform tools (pre-commit / dependabot / dbt docs), explicit non-goals, open design questions.
 - [README.md](README.md) — public landing page, honest v0 scope.
-- [pyproject.toml](pyproject.toml) — `epitaxy v0.1.0a1`, `requires-python = ">=3.10"`, deps: `typer`, `pydantic`, `mcp`, `tomli` (py<3.11). PR2 adds `pyyaml`.
+- [pyproject.toml](pyproject.toml) — `epitaxy v0.1.0`, `requires-python = ">=3.10"`, deps: `typer`, `pydantic`, `mcp`, `pyyaml`, `tomli` (py<3.11). Dev deps include `httpx`, `pytest-asyncio`, `beautifulsoup4` (added in PR3). PR4 adds no new deps.
