@@ -17,15 +17,22 @@ package-root prefix when computing dotted module names (parser/python.py
 from sample.data import load
 
 
+DEFAULT_RANK = 64  # epitaxy:param
+sample_temperature_K = 77  # epitaxy:param
+
+
 class M:
     def fit(self):
         """Calls `load()` (imported-name) and `self.cleanup()` (self-method)."""
+        rank = 128  # epitaxy:param
+        learning_rate = 0.001  # NO marker — claimed by ADR 2026-04-rank-dim decides:
         rows = load()
         self.cleanup()
-        return rows
+        return rows, rank, learning_rate
 
     def cleanup(self):
-        pass
+        cleanup_threshold = 0.95  # unmarked + not ADR-claimed — should NOT emit
+        return cleanup_threshold
 
 
 def top_level():

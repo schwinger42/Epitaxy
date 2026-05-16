@@ -267,9 +267,12 @@ def test_cycle_in_supersedes_chain_truncates_with_note() -> None:
 
 
 def test_cycle_detection_walk_uses_visited_set() -> None:
-    """Build a 3-cycle: A supersedes B supersedes C supersedes A.
-    Only A decides the param. A has no head superseding it (the cycle is
-    among A→B→C→A's tail). The walk hits A again via visited check."""
+    """3-cycle WITHIN the relevant set: A, B, C all decide same param;
+    A→B, B→C, C→A (supersedes cycle). The walk should:
+    - detect "no decision head" (every relevant ADR superseded by another
+      relevant ADR) → defensive fallback note
+    - then walk from lex-first head (A) → A→B→C→back to A → cycle note.
+    """
     param = _param()
     adr_a = _adr("2026-04-aaa")
     adr_b = _adr("2026-04-bbb")
@@ -279,16 +282,40 @@ def test_cycle_detection_walk_uses_visited_set() -> None:
         nodes=[param, adr_a, adr_b, adr_c],
         edges=[
             _decides(adr_a.id, param.id),
+            _decides(adr_b.id, param.id),
+            _decides(adr_c.id, param.id),
             _supersedes(adr_a.id, adr_b.id),
             _supersedes(adr_b.id, adr_c.id),
             _supersedes(adr_c.id, adr_a.id),  # closes the cycle
         ],
     )
     result = por_trace_impl(idx, param.id)
-    # All three ADRs are superseded by another (A by C) → no clean head;
-    # defensive lex-first fallback emits the "no decision head found" note.
     note_text = " ".join(result["notes"])
+    # At least one of the two anomaly notes should fire (typically both)
     assert "no decision head" in note_text or "cycle" in note_text
+
+
+def test_supersedes_outside_relevant_set_does_not_extend_chain() -> None:
+    """If A decides the param + A supersedes B but B does NOT decide the
+    param, the chain is just [A] — B isn't in this parameter's decision
+    trail. Spec-conformance check per MCP §3."""
+    param = _param()
+    adr_a = _adr("2026-04")
+    adr_b = _adr("2026-02-unrelated")
+    idx = _make_index(
+        parameters_enabled=True,
+        nodes=[param, adr_a, adr_b],
+        edges=[
+            _decides(adr_a.id, param.id),
+            # B doesn't decide param — only A does.
+            _supersedes(adr_a.id, adr_b.id),
+        ],
+    )
+    result = por_trace_impl(idx, param.id)
+    chain_ids = [a["id"] for a in result["decision_chain"]]
+    assert chain_ids == [adr_a.id]  # B not in chain (doesn't decide param)
+    assert result["parallel_heads"] == []
+    assert result["notes"] == []
 
 
 # --------------------------------------------------------------------------- #

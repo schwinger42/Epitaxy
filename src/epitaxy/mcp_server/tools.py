@@ -107,39 +107,56 @@ def _build_decision_chain(index: Index, parameter_id: str) -> _ChainResult:
     """Walk supersedes chain backwards from the head ADR that decides
     `parameter_id`. See docs/MCP.md §3 for the contract.
 
-    Codex round-1 Med-6: parallel decision heads (multiple ADRs decide the
-    same parameter, none superseded) → surface ALL heads in
-    `parallel_heads` so LLM consumers see the ambiguity instead of getting
-    a silently-picked single chain.
+    Per MCP §3: the chain contains ONLY ADRs that have a `decides` edge to
+    this parameter (the "relevant" set), ordered newest-first via the
+    supersedes graph. ADRs in the wider supersedes chain that DON'T decide
+    this specific parameter are NOT included — that would mix unrelated
+    historical context with this parameter's decision trail.
+
+    Codex round-1 Med-6: parallel decision heads (multiple deciders, none
+    superseded by another decider) → surface ALL heads in `parallel_heads`
+    so LLM consumers see the ambiguity instead of a silent pick.
 
     Codex round-1 Low-12: cycle detection via `visited` set. When a cycle
-    is hit, the walk truncates + a note is added to the `notes` list.
+    inside the relevant set is hit, the walk truncates + a note is added.
     """
-    deciders = {
+    deciders_set = {
         e.from_ for e in index.edges if e.type == "decides" and e.to == parameter_id
     }
     adr_by_id: dict[str, AdrNode] = {
         n.id: n for n in index.nodes if isinstance(n, AdrNode)
     }
-    relevant_adrs = [adr_by_id[d] for d in deciders if d in adr_by_id]
+    relevant_adrs = [adr_by_id[d] for d in deciders_set if d in adr_by_id]
     if not relevant_adrs:
         return _ChainResult(chain=[], parallel_heads=[], notes=[])
 
+    relevant_ids = {a.id for a in relevant_adrs}
     sup_to = {e.from_: e.to for e in index.edges if e.type == "supersedes"}
-    sup_from = {e.to for e in index.edges if e.type == "supersedes"}
+
+    # A "head" in the relevant set is an ADR not superseded by ANOTHER
+    # decider of this same parameter. Supersedes pointing OUT of the
+    # relevant set (e.g. to an ancestor ADR that doesn't decide this param)
+    # does not disqualify a head — that ancestor isn't in the chain anyway.
+    superseded_by_peer = {
+        e.to for e in index.edges
+        if e.type == "supersedes" and e.from_ in relevant_ids and e.to in relevant_ids
+    }
     heads = sorted(
-        [a for a in relevant_adrs if a.id not in sup_from], key=lambda a: a.id
+        [a for a in relevant_adrs if a.id not in superseded_by_peer],
+        key=lambda a: a.id,
     )
 
     notes: list[str] = []
     parallel_heads = heads if len(heads) > 1 else []
     if not heads:
-        # All deciders are themselves superseded — defensive fallback to
-        # lex-first relevant ADR + surface in notes.
+        # Every relevant ADR is superseded by another relevant ADR — a
+        # supersedes cycle within the relevant set. Defensive fallback to
+        # lex-first + surface in notes.
         heads = sorted(relevant_adrs, key=lambda a: a.id)
         notes.append(
-            "no decision head found (all deciding ADRs are themselves "
-            f"superseded); using lex-first ADR {heads[0].id!r} as chain root."
+            "no decision head found (all deciding ADRs are superseded by "
+            f"another decider — cycle in relevant set); using lex-first "
+            f"ADR {heads[0].id!r} as chain root."
         )
 
     primary_head = heads[0]
@@ -148,11 +165,15 @@ def _build_decision_chain(index: Index, parameter_id: str) -> _ChainResult:
     current = primary_head.id
     while current in sup_to:
         next_id = sup_to[current]
+        if next_id not in relevant_ids:
+            # Supersedes points outside the relevant set — that ancestor
+            # doesn't decide this parameter, so it's not part of THIS
+            # parameter's decision trail. Stop walk silently.
+            break
         next_adr = adr_by_id.get(next_id)
         if next_adr is None:
-            # Dangling supersedes target per SCHEMA §6 — stop walk silently
-            # (the dangling edge is already in the graph; TraceResult
-            # doesn't need to repeat it).
+            # Defensive: relevant_ids is built from adr_by_id keys, so this
+            # shouldn't fire. Kept for safety.
             break
         if next_id in visited:
             notes.append(

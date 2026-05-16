@@ -3,6 +3,9 @@ title: ALS rank dimension — 128 over 64
 status: accepted
 date: 2026-04-12
 supersedes: adr:decisions/2026-02-rank-baseline.md
+decides:
+  - param:src/sample/model.py::M.fit::rank
+  - param:src/sample/model.py::M.fit::learning_rate
 ---
 
 # ALS rank dimension — 128 over 64

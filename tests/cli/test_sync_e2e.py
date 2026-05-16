@@ -69,24 +69,32 @@ def test_sync_index_contains_expected_edges(sample_repo: Path) -> None:
 
 
 def test_sync_parameters_flag_runs_extraction(sample_repo: Path) -> None:
-    """PR4: `--parameters` actually extracts now (was fail-fast in PR1–PR3).
+    """PR4: `--parameters` actually extracts (was fail-fast in PR1–PR3).
 
-    The PR1–PR3-era sample_repo has no `# epitaxy:param` markers + no ADR
-    `decides:` frontmatter, so extraction emits zero parameter nodes but
-    succeeds without erroring. The C6 commit adds a fixture with marked
-    parameters that exercises the full extraction path.
+    Fixture exercises all 4 SCHEMA §2.5 paths:
+    - Comment-marked (rank, DEFAULT_RANK, sample_temperature_K)
+    - ADR-claimed only (learning_rate — no comment, listed in
+      decisions/2026-04-rank-dim.md `decides:` frontmatter)
+    - Composite (rank also in 2026-04 `decides:`)
+    - Negative (cleanup_threshold has no marker + no ADR claim)
     """
     result = runner.invoke(app, ["sync", "--parameters"])
     assert result.exit_code == 0, result.output
     payload = json.loads(
         (sample_repo / ".epitaxy" / "index.json").read_text()
     )
-    # parameters_enabled honored in config trail
     assert payload["config"]["parameters_enabled"] is True
-    # No parameter nodes yet (fixture doesn't mark any) — exercise scaffold
-    param_count = sum(1 for n in payload["nodes"] if n["type"] == "parameter")
-    assert param_count == 0
-    assert payload["stats"]["parameters"] == 0
+    param_nodes = [n for n in payload["nodes"] if n["type"] == "parameter"]
+    param_names = sorted(n["name"] for n in param_nodes)
+    assert param_names == [
+        "DEFAULT_RANK",
+        "learning_rate",
+        "rank",
+        "sample_temperature_K",
+    ]
+    assert payload["stats"]["parameters"] == 4
+    # Negative case: cleanup_threshold has no marker + no ADR claim
+    assert "cleanup_threshold" not in param_names
 
 
 def test_sync_prints_gitignore_tip_when_missing(sample_repo: Path) -> None:
