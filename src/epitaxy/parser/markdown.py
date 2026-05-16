@@ -235,7 +235,10 @@ def _parse_adr_file(
                     f"parameter ID; expected param:<path>::<scope>::<name>"
                 )
             validated.append(entry_stripped)
-        decides_list = validated if validated else None
+        # Codex code-time Low-7: preserve `decides: []` (explicit empty list)
+        # as `decides=[]` rather than collapsing to None. Distinguishes
+        # "user explicitly cleared the list" from "no key in frontmatter."
+        decides_list = validated
         if parameters_enabled and validated:
             for param_id in validated:
                 edges.append(

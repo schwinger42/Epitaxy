@@ -329,6 +329,35 @@ def test_unmarked_assignment_skipped(tmp_path: Path) -> None:
     assert [n for n in nodes if isinstance(n, ParameterNode)] == []
 
 
+def test_semicolon_stacked_marker_attributes_to_rightmost(tmp_path: Path) -> None:
+    """Codex code-time Med-2: `a = 1; b = 2  # epitaxy:param` → marker
+    applies to `b` only (rightmost on the line), NOT to `a`.
+
+    Determined by `.col_offset`: the rightmost assignment on the marked
+    line is closest to the trailing comment.
+    """
+    _write(
+        tmp_path / "m.py",
+        "def go():\n    a = 1; b = 2  # epitaxy:param\n",
+    )
+    nodes, _edges, _errors, _bodies = _parse(tmp_path, parameters_enabled=True)
+    params = {p.name: p for p in nodes if isinstance(p, ParameterNode)}
+    assert "b" in params
+    assert "a" not in params
+    assert params["b"].value == "2"
+    assert params["b"].provenance == "ast+comment"
+
+
+def test_semicolon_stacked_no_marker_emits_nothing(tmp_path: Path) -> None:
+    """Sanity: semicolon-stacked with NO marker → no parameters."""
+    _write(
+        tmp_path / "m.py",
+        "def go():\n    a = 1; b = 2\n",
+    )
+    nodes, _edges, _errors, _bodies = _parse(tmp_path, parameters_enabled=True)
+    assert [n for n in nodes if isinstance(n, ParameterNode)] == []
+
+
 # --------------------------------------------------------------------------- #
 # Gating: parameters_enabled=False → ZERO parameter nodes                     #
 # --------------------------------------------------------------------------- #

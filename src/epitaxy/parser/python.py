@@ -305,6 +305,26 @@ def _extract_parameters(
     source_lines = source_text.split("\n")
     parameters: list[ParameterNode] = []
 
+    # Codex code-time Med-2 fix: build a map of (line_no → rightmost
+    # col_offset of any candidate assignment on that line) so we can
+    # disambiguate semicolon-stacked assignments. The trailing
+    # `# epitaxy:param` comment belongs to the rightmost assignment only
+    # (the one closest to the comment); other assignments on the same
+    # line are not marked.
+    rightmost_col_per_line: dict[int, int] = {}
+
+    def _record(assign: _AssignNode) -> None:
+        line_no = assign.lineno
+        col = assign.col_offset
+        if rightmost_col_per_line.get(line_no, -1) < col:
+            rightmost_col_per_line[line_no] = col
+
+    for assign in _iter_assignments_in_body(tree.body):
+        _record(assign)
+    for _qn, fdef, _line in _walk_functions(tree):
+        for assign in _iter_assignments_in_body(fdef.body):
+            _record(assign)
+
     def _consider(
         assign: _AssignNode,
         scope: str,
@@ -325,7 +345,16 @@ def _extract_parameters(
             return  # defensive
         source_line = source_lines[line_no - 1]
 
+        # Codex code-time Med-2: if there's a `# epitaxy:param` marker on
+        # this physical line, it belongs to the RIGHTMOST assignment on
+        # the line. Other assignments on the same line (semicolon-stacked
+        # `a = 1; b = 2  # epitaxy:param` case) don't get the marker.
         has_comment = bool(_EPITAXY_PARAM_RE.search(source_line))
+        if has_comment and assign.col_offset < rightmost_col_per_line.get(
+            line_no, -1
+        ):
+            has_comment = False  # marker belongs to a later assignment
+
         candidate_id = parameter_id(rel_path, scope, name)
         has_adr_claim = candidate_id in decides_claimed
 

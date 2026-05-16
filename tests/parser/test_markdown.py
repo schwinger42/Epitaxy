@@ -327,6 +327,35 @@ def test_decides_dangling_target_emits_edge_anyway(tmp_path: Path) -> None:
     # renderer handles display.
 
 
+def test_decides_empty_list_preserved_as_empty(tmp_path: Path) -> None:
+    """Codex code-time Low-7: `decides: []` (explicit empty list) should
+    survive as `AdrNode.decides=[]`, distinguishing it from `decides`-absent
+    (which is None)."""
+    _write(
+        tmp_path / "decisions" / "explicit-empty.md",
+        "---\ntitle: t\ndecides: []\n---\n# t",
+    )
+    nodes, edges, errors, _bodies, claimed = parse_markdown(
+        tmp_path, parameters_enabled=True
+    )
+    assert errors == [] and len(nodes) == 1
+    assert nodes[0].decides == []  # NOT None
+    assert edges == []  # no entries → no decides edges
+    assert claimed == set()
+
+
+def test_decides_absent_key_yields_none(tmp_path: Path) -> None:
+    """No `decides:` key in frontmatter → AdrNode.decides=None (distinct
+    from `decides: []` per Codex code-time Low-7)."""
+    _write(
+        tmp_path / "decisions" / "no-decides.md",
+        "---\ntitle: t\n---\n# t",
+    )
+    nodes, _, errors, _, _ = parse_markdown(tmp_path, parameters_enabled=True)
+    assert errors == [] and len(nodes) == 1
+    assert nodes[0].decides is None
+
+
 def test_decides_claimed_set_accumulates_across_adrs(tmp_path: Path) -> None:
     """Multiple ADRs decide different params → set is the union."""
     _write(
