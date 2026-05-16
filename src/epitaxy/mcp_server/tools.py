@@ -107,18 +107,26 @@ def _build_decision_chain(index: Index, parameter_id: str) -> _ChainResult:
     """Walk supersedes chain backwards from the head ADR that decides
     `parameter_id`. See docs/MCP.md §3 for the contract.
 
-    Per MCP §3: the chain contains ONLY ADRs that have a `decides` edge to
-    this parameter (the "relevant" set), ordered newest-first via the
-    supersedes graph. ADRs in the wider supersedes chain that DON'T decide
-    this specific parameter are NOT included — that would mix unrelated
-    historical context with this parameter's decision trail.
+    Per MCP §3: the chain contains ADRs that have a `decides` edge to this
+    parameter, ordered newest-first via the supersedes graph. Two refinements
+    from Codex code-time review Med-3:
+
+    1. **Transitive head determination**: a decider D is NOT a head if some
+       OTHER decider can reach D via supersedes-following. This handles the
+       X→Y→Z case where X and Z both decide param but Y (in between) doesn't:
+       X transitively supersedes Z (via Y), so X is the head and Z is in
+       the chain as historical.
+
+    2. **Walk skip-through**: when the supersedes walk hits a non-decider,
+       it skips that ADR (doesn't append to chain) but CONTINUES walking
+       to reach any historical deciders further back. The non-decider's
+       only role is graph connectivity.
 
     Codex round-1 Med-6: parallel decision heads (multiple deciders, none
-    superseded by another decider) → surface ALL heads in `parallel_heads`
-    so LLM consumers see the ambiguity instead of a silent pick.
+    transitively superseding another) → surface ALL heads in
+    `parallel_heads`.
 
-    Codex round-1 Low-12: cycle detection via `visited` set. When a cycle
-    inside the relevant set is hit, the walk truncates + a note is added.
+    Codex round-1 Low-12: cycle detection via `visited` set.
     """
     deciders_set = {
         e.from_ for e in index.edges if e.type == "decides" and e.to == parameter_id
@@ -133,16 +141,32 @@ def _build_decision_chain(index: Index, parameter_id: str) -> _ChainResult:
     relevant_ids = {a.id for a in relevant_adrs}
     sup_to = {e.from_: e.to for e in index.edges if e.type == "supersedes"}
 
-    # A "head" in the relevant set is an ADR not superseded by ANOTHER
-    # decider of this same parameter. Supersedes pointing OUT of the
-    # relevant set (e.g. to an ancestor ADR that doesn't decide this param)
-    # does not disqualify a head — that ancestor isn't in the chain anyway.
-    superseded_by_peer = {
-        e.to for e in index.edges
-        if e.type == "supersedes" and e.from_ in relevant_ids and e.to in relevant_ids
-    }
+    # Transitive head determination (Codex code-time Med-3): a decider D is
+    # NOT a head if some OTHER decider can reach D via supersedes-following.
+    def _supersedes_reachable_from(start: str) -> set[str]:
+        """All ADR IDs reachable from `start` by following supersedes edges
+        (not including `start` itself; cycle-safe via visited set)."""
+        reached: set[str] = set()
+        stack = [start]
+        local_visited: set[str] = {start}
+        while stack:
+            node = stack.pop()
+            nxt = sup_to.get(node)
+            if nxt is None or nxt in local_visited:
+                continue
+            local_visited.add(nxt)
+            reached.add(nxt)
+            stack.append(nxt)
+        return reached
+
+    superseded_by_some_decider: set[str] = set()
+    for d_id in relevant_ids:
+        ancestors = _supersedes_reachable_from(d_id)
+        for other in ancestors & relevant_ids:
+            superseded_by_some_decider.add(other)
+
     heads = sorted(
-        [a for a in relevant_adrs if a.id not in superseded_by_peer],
+        [a for a in relevant_adrs if a.id not in superseded_by_some_decider],
         key=lambda a: a.id,
     )
 
@@ -150,8 +174,8 @@ def _build_decision_chain(index: Index, parameter_id: str) -> _ChainResult:
     parallel_heads = heads if len(heads) > 1 else []
     if not heads:
         # Every relevant ADR is superseded by another relevant ADR — a
-        # supersedes cycle within the relevant set. Defensive fallback to
-        # lex-first + surface in notes.
+        # supersedes cycle that includes the relevant set. Defensive
+        # fallback to lex-first + surface in notes.
         heads = sorted(relevant_adrs, key=lambda a: a.id)
         notes.append(
             "no decision head found (all deciding ADRs are superseded by "
@@ -165,24 +189,25 @@ def _build_decision_chain(index: Index, parameter_id: str) -> _ChainResult:
     current = primary_head.id
     while current in sup_to:
         next_id = sup_to[current]
-        if next_id not in relevant_ids:
-            # Supersedes points outside the relevant set — that ancestor
-            # doesn't decide this parameter, so it's not part of THIS
-            # parameter's decision trail. Stop walk silently.
-            break
-        next_adr = adr_by_id.get(next_id)
-        if next_adr is None:
-            # Defensive: relevant_ids is built from adr_by_id keys, so this
-            # shouldn't fire. Kept for safety.
-            break
         if next_id in visited:
             notes.append(
                 f"cycle in supersedes chain involving {next_id!r} "
                 f"(already visited); chain truncated at {current!r}."
             )
             break
-        chain.append(next_adr)
+        next_adr = adr_by_id.get(next_id)
+        if next_adr is None:
+            # Dangling supersedes target per SCHEMA §6 — stop walk silently.
+            # The dangling edge is already in the graph; TraceResult doesn't
+            # need to repeat it.
+            break
         visited.add(next_id)
+        # Codex code-time Med-3: skip-through non-deciders. If next_id is
+        # in the relevant set (decides this param), include in chain.
+        # Otherwise it's just graph connectivity to reach a further
+        # historical decider — don't append, but keep walking.
+        if next_id in relevant_ids:
+            chain.append(next_adr)
         current = next_id
 
     return _ChainResult(chain=chain, parallel_heads=parallel_heads, notes=notes)

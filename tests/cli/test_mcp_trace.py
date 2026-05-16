@@ -318,6 +318,35 @@ def test_supersedes_outside_relevant_set_does_not_extend_chain() -> None:
     assert result["notes"] == []
 
 
+def test_chain_skips_through_non_decider_to_reach_historical_decider() -> None:
+    """Codex code-time Med-3 regression target. X decides param,
+    X supersedes Y (Y doesn't decide), Y supersedes Z (Z decides).
+
+    Z should appear in chain — it's a historical decider transitively
+    reachable from X. Y skipped (doesn't decide). parallel_heads=[]
+    because Z is transitively superseded by X (X → Y → Z).
+    """
+    param = _param()
+    adr_x = _adr("2026-04-x")  # current decider
+    adr_y = _adr("2026-03-y")  # intermediate non-decider
+    adr_z = _adr("2026-02-z")  # historical decider
+    idx = _make_index(
+        parameters_enabled=True,
+        nodes=[param, adr_x, adr_y, adr_z],
+        edges=[
+            _decides(adr_x.id, param.id),
+            _decides(adr_z.id, param.id),
+            _supersedes(adr_x.id, adr_y.id),
+            _supersedes(adr_y.id, adr_z.id),
+        ],
+    )
+    result = por_trace_impl(idx, param.id)
+    chain_ids = [a["id"] for a in result["decision_chain"]]
+    assert chain_ids == [adr_x.id, adr_z.id]  # Y skipped, Z appended
+    assert result["parallel_heads"] == []  # X transitively supersedes Z
+    assert result["notes"] == []
+
+
 # --------------------------------------------------------------------------- #
 # Edge cases                                                                  #
 # --------------------------------------------------------------------------- #
