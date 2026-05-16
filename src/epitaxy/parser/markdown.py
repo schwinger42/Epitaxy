@@ -1,25 +1,35 @@
-"""Markdown parser → ADR + plan nodes + supersedes edges.
+"""Markdown parser → ADR + plan nodes + supersedes + decides edges.
 
-PR2 scope per docs/SCHEMA.md §2.3, §2.4, §3.
+PR2 + PR4 scope per docs/SCHEMA.md §2.3, §2.4, §3.
 
 Frontmatter parsing is strict-fail: malformed YAML or wrong-typed `supersedes:`
 value produces a `ParseError` (sync exits 3 per CLI.md §7) — matches PR1's
 fail-fast lesson per [[feedback_honor_published_contracts]].
 
-Supersedes edges are emitted **unconditionally** — even when the target ADR
-is absent from this index, per SCHEMA §6 worked example: "the superseded ADR
-appears as the target of a supersedes edge even if the file no longer exists.
-v0 keeps the edge as a historical reference." This reverts an earlier plan
-draft (Codex round-1 Med-2) against SCHEMA ground truth (Codex round-2 High-1).
+Edge-emission rules:
 
-NOT in PR2:
-- `decides:` frontmatter — ignored (PR4 territory; Codex round-1 High-2 lock)
-- POR-style body parsing — that's parser/por.py for Python docstrings
-- markdown link `references` edges — that's parser/refs.py (final-pass)
+- `supersedes` edges: emit unconditionally per SCHEMA §6, even when the target
+  ADR is absent (the dangling edge is drift signal, not a parse error). PR3
+  serve renderer handles missing-target rendering downstream.
+- `decides` edges (PR4): emit only when `parameters_enabled=True` per SCHEMA
+  §3. The dangling-target rule applies symmetrically (PR4 amended SCHEMA §6
+  to bless this explicitly). When `parameters_enabled=False`, `decides:`
+  frontmatter is still parsed into `AdrNode.decides` (the field is data per
+  SCHEMA §2.3) but no edges are emitted.
+- `decides:` entry format: each entry must match the canonical parameter ID
+  `^param:[^:]+::[^:]+::[^:]+$` (Codex round-1 Med-8). Bare names like
+  `decides: - rank` are malformed → ParseError.
+
+PR4 return type: 5-tuple `(nodes, edges, errors, body_records,
+decides_claimed_param_ids: set[str])`. The new set is consumed by
+parser/python.py's parameter extractor — assignments whose candidate
+ParameterNode ID matches an entry are emitted with provenance="adr-frontmatter"
+even without a `# epitaxy:param` comment (SCHEMA §2.5 OR clause).
 """
 
 from __future__ import annotations
 
+import re
 from datetime import date as date_type
 from pathlib import Path
 
@@ -138,12 +148,26 @@ def _parse_frontmatter_dict(frontmatter: str | None) -> dict:
     return data
 
 
+# Canonical parameter-ID format per SCHEMA §2.5 — `param:<path>::<scope>::<name>`.
+# Used to validate ADR `decides:` entries (Codex round-1 Med-8).
+_PARAM_ID_RE = re.compile(r"^param:[^:]+::[^:]+::[^:]+$")
+
+
 def _parse_adr_file(
-    abs_path: Path, repo_root: Path
-) -> tuple[AdrNode, Edge | None, BodyRecord | None]:
+    abs_path: Path,
+    repo_root: Path,
+    *,
+    parameters_enabled: bool,
+) -> tuple[AdrNode, list[Edge], BodyRecord | None]:
     """Parse one ADR markdown file. Raises _MarkdownParseError on hard failure.
 
-    Returns (AdrNode, supersedes_edge_or_None, body_record_or_None).
+    Returns (AdrNode, list_of_emitted_edges, body_record_or_None). The edge
+    list always contains 0 or 1 supersedes edge plus 0..N decides edges
+    (only when `parameters_enabled=True` per SCHEMA §3).
+
+    `AdrNode.decides` is populated from frontmatter regardless of
+    `parameters_enabled` (the field is data per SCHEMA §2.3). Edge
+    emission is gated separately.
     """
     try:
         text = abs_path.read_text(encoding="utf-8")
@@ -164,10 +188,11 @@ def _parse_adr_file(
     # summary: first paragraph after H1, or after frontmatter if no H1
     summary = _first_paragraph(body_after_h1 if h1 is not None else body)
 
-    # supersedes
+    edges: list[Edge] = []
+
+    # supersedes (PR2)
     supersedes_value = fm.get("supersedes")
     supersedes_id: str | None = None
-    supersedes_edge: Edge | None = None
     if supersedes_value is not None:
         if not isinstance(supersedes_value, str):
             raise _MarkdownParseError(
@@ -175,15 +200,55 @@ def _parse_adr_file(
                 f"{type(supersedes_value).__name__}"
             )
         supersedes_id = _normalize_adr_target(supersedes_value)
-        supersedes_edge = Edge.model_validate(
-            {
-                "from": f"adr:{rel_path}",
-                "to": supersedes_id,
-                "type": "supersedes",
-                "source": "frontmatter:supersedes",
-                "provenance": "frontmatter",
-            }
+        edges.append(
+            Edge.model_validate(
+                {
+                    "from": f"adr:{rel_path}",
+                    "to": supersedes_id,
+                    "type": "supersedes",
+                    "source": "frontmatter:supersedes",
+                    "provenance": "frontmatter",
+                }
+            )
         )
+
+    # decides (PR4): validate format always; emit edges only when enabled
+    decides_raw = fm.get("decides")
+    decides_list: list[str] | None = None
+    if decides_raw is not None:
+        if not isinstance(decides_raw, list):
+            raise _MarkdownParseError(
+                f"decides frontmatter must be a list, got "
+                f"{type(decides_raw).__name__}"
+            )
+        validated: list[str] = []
+        for entry in decides_raw:
+            if not isinstance(entry, str):
+                raise _MarkdownParseError(
+                    f"decides entry must be a string, got "
+                    f"{type(entry).__name__}: {entry!r}"
+                )
+            entry_stripped = entry.strip()
+            if not _PARAM_ID_RE.match(entry_stripped):
+                raise _MarkdownParseError(
+                    f"decides entry {entry_stripped!r} is not a canonical "
+                    f"parameter ID; expected param:<path>::<scope>::<name>"
+                )
+            validated.append(entry_stripped)
+        decides_list = validated if validated else None
+        if parameters_enabled and validated:
+            for param_id in validated:
+                edges.append(
+                    Edge.model_validate(
+                        {
+                            "from": f"adr:{rel_path}",
+                            "to": param_id,
+                            "type": "decides",
+                            "source": "frontmatter:decides",
+                            "provenance": "frontmatter",
+                        }
+                    )
+                )
 
     node = AdrNode(
         id=f"adr:{rel_path}",
@@ -192,6 +257,7 @@ def _parse_adr_file(
         status=_coerce_str(fm.get("status")),
         date=_coerce_str(fm.get("date")),
         supersedes=supersedes_id,
+        decides=decides_list,
         summary=summary,
         provenance="frontmatter+body",
     )
@@ -206,7 +272,7 @@ def _parse_adr_file(
             source_kind="adr-body",
         )
 
-    return node, supersedes_edge, body_record
+    return node, edges, body_record
 
 
 def _parse_plan_file(
@@ -262,20 +328,36 @@ def parse_markdown(
     *,
     adr_dir: str = "decisions/",
     plan_dir: str = "docs/plans/",
-) -> tuple[list[Node], list[Edge], list[ParseError], list[BodyRecord]]:
-    """Scan adr_dir + plan_dir under repo_root → ADR/plan nodes + supersedes edges.
+    parameters_enabled: bool = False,
+) -> tuple[
+    list[Node], list[Edge], list[ParseError], list[BodyRecord], set[str]
+]:
+    """Scan adr_dir + plan_dir under repo_root → ADR/plan nodes + supersedes/decides edges.
 
-    Per CLI.md §7 exit codes: per-file errors are collected, not raised, so the
-    caller can still write a partial index and exit 3.
+    Per CLI.md §7 exit codes: per-file errors are collected, not raised, so
+    the caller can still write a partial index and exit 3.
 
-    PR2: returns a 4th element — `list[BodyRecord]` accumulating ADR + plan
-    body texts (post-frontmatter) for the references-edge final pass in
-    parser/refs.py.
+    PR4 return shape (5-tuple):
+
+    1. `list[Node]` — emitted ADR + plan nodes
+    2. `list[Edge]` — emitted supersedes edges (always) + decides edges
+       (when `parameters_enabled=True`)
+    3. `list[ParseError]` — per-file parse failures (malformed YAML,
+       wrong-typed values, non-canonical decides entries)
+    4. `list[BodyRecord]` — post-frontmatter body texts for the
+       references-edge final pass in parser/refs.py
+    5. `set[str]` — `decides_claimed_param_ids`: union of validated
+       parameter IDs from every ADR's `decides:` list, regardless of
+       `parameters_enabled`. parser/python uses this for SCHEMA §2.5's
+       OR-clause: assignments whose candidate ParameterNode ID is in
+       this set get emitted as parameter nodes even without the
+       `# epitaxy:param` comment marker.
     """
     nodes: list[Node] = []
     edges: list[Edge] = []
     errors: list[ParseError] = []
     body_records: list[BodyRecord] = []
+    decides_claimed: set[str] = set()
 
     adr_root = repo_root / adr_dir
     if adr_root.is_dir():
@@ -283,17 +365,21 @@ def parse_markdown(
             if not md_path.is_file():
                 continue
             try:
-                adr_node, supersedes_edge, body_record = _parse_adr_file(
-                    md_path, repo_root
+                adr_node, file_edges, body_record = _parse_adr_file(
+                    md_path, repo_root, parameters_enabled=parameters_enabled
                 )
             except _MarkdownParseError as e:
                 errors.append(ParseError(path=md_path, reason=e.reason))
                 continue
             nodes.append(adr_node)
-            if supersedes_edge is not None:
-                edges.append(supersedes_edge)
+            edges.extend(file_edges)
             if body_record is not None:
                 body_records.append(body_record)
+            # Always accumulate the set, even when parameters_enabled=False:
+            # parser/python may want to know (e.g. for a forthcoming dry-run
+            # mode, or for diagnostic logging). Cheap to collect.
+            if adr_node.decides:
+                decides_claimed.update(adr_node.decides)
 
     plan_root = repo_root / plan_dir
     if plan_root.is_dir():
@@ -309,4 +395,4 @@ def parse_markdown(
             if body_record is not None:
                 body_records.append(body_record)
 
-    return nodes, edges, errors, body_records
+    return nodes, edges, errors, body_records, decides_claimed

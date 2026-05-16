@@ -185,7 +185,7 @@ def sync(
     py_nodes, py_edges, py_errors, py_bodies = parse_repo(
         repo_root, py_files, package_roots=package_roots
     )
-    md_nodes, md_edges, md_errors, md_bodies = parse_markdown(
+    md_nodes, md_edges, md_errors, md_bodies, _ = parse_markdown(
         repo_root, adr_dir=config.adr_dir, plan_dir=config.plan_dir
     )
 
