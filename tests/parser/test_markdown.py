@@ -225,17 +225,21 @@ def test_nested_md_files_discovered(tmp_path: Path) -> None:
     assert len(nodes) == 1 and nodes[0].path == "decisions/sub/nested.md"
 
 
-def test_decides_field_ignored_in_pr2(tmp_path: Path) -> None:
-    """Codex round-1 High-2 lock: PR2 ignores `decides:`; PR4 will add it."""
+def test_decides_frontmatter_not_yet_wired_in_c1(tmp_path: Path) -> None:
+    """PR4 commit 1 added AdrNode.decides field but parser/markdown.py
+    hasn't been updated yet (that's C2). Parser still ignores `decides:`
+    in frontmatter, so the field defaults to None on the emitted node.
+    C2 will populate from frontmatter and rewrite this test."""
     _write(
         tmp_path / "decisions" / "with-decides.md",
         "---\ntitle: t\ndecides:\n  - param:src/m.py::foo::rank\n---\n# t",
     )
     nodes, edges, errors, _bodies = parse_markdown(tmp_path)
     assert errors == [] and edges == [] and len(nodes) == 1
-    # decides is not on AdrNode at all in PR2 — model would have rejected
-    # the field on construction if it were declared
-    assert not hasattr(nodes[0], "decides")
+    # The field EXISTS on the model (PR4 C1 added it) but the parser
+    # doesn't populate yet — defaults to None.
+    assert hasattr(nodes[0], "decides")
+    assert nodes[0].decides is None
 
 
 def test_unicode_paths_and_titles(tmp_path: Path) -> None:

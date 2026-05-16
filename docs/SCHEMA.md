@@ -151,7 +151,7 @@ Fields:
 | `value` | string | yes | source-rendered RHS (not evaluated) |
 | `line` | int | yes | |
 | `decided_by` | string[] | no | ADR IDs that decide this value |
-| `provenance` | string | yes | `ast+comment` or `adr-frontmatter` |
+| `provenance` | string | yes | `ast+comment`, `adr-frontmatter`, or `ast+comment+adr-frontmatter` (composite — both signals present on the same assignment) |
 
 ### 2.6 `data_asset` (deferred to v1+)
 
@@ -366,6 +366,8 @@ A default `epi sync` (no `--parameters`) writes:
 ```
 
 Note: the superseded ADR (`adr:decisions/2026-02-rank-baseline.md`) appears as the *target* of a `supersedes` edge even if the file no longer exists in the repo. v0 keeps the edge as a historical reference; v2+ drift detection can flag missing target nodes for cleanup.
+
+The same dangling-target rule applies to **`decides` edges**: an ADR may reference a parameter that no longer exists in source (renamed, removed, or refactored out). v0 emits the `decides` edge anyway — the dangling edge is *drift signal*, not a parse error. `por_explain` callers see the dangling target through normal incident-edge enumeration; the Pillar-3 drill-down site renders unresolvable edge targets via plain text rather than a broken anchor. The rule symmetrically covers both `supersedes` and `decides` because both represent historical / cross-cutting references where the target's continued existence is an evolution-of-the-graph concern, not a structural-validity concern.
 
 ## 7. What v0 deliberately does NOT do
 

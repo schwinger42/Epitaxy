@@ -10,6 +10,7 @@ from .models import (
     IndexStats,
     ModuleNode,
     Node,
+    ParameterNode,
     PlanNode,
 )
 
@@ -22,6 +23,7 @@ __all__ = [
     "IndexStats",
     "ModuleNode",
     "Node",
+    "ParameterNode",
     "PlanNode",
     "read_index",
     "write_index",

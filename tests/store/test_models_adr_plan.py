@@ -21,6 +21,7 @@ from epitaxy.store import (
     IndexStats,
     ModuleNode,
     Node,
+    ParameterNode,
     PlanNode,
     read_index,
     write_index,
@@ -187,42 +188,183 @@ def test_supersedes_target_may_not_exist_in_node_set(tmp_path: Path) -> None:
     assert restored == idx
 
 
-def test_parameter_node_remains_deferred_to_pr4() -> None:
-    """Codex round-1 High-2 lock: ParameterNode is NOT in the v0 schema yet.
+def test_parameter_node_present_post_pr4() -> None:
+    """Forward-compat guard: ParameterNode IS in the Node union post-PR4.
 
-    Adding it pre-PR4 would create a live deserialization path no PR2 code
-    can consume. This test fails the day someone tries to sneak the model
-    in without going through the PR4 plan.
+    Was the PR2-era `test_parameter_node_remains_deferred_to_pr4`; flipped
+    in PR4 commit 1. This test fails if a future PR accidentally removes
+    ParameterNode from the union.
     """
     from typing import get_args
 
     from epitaxy.store import models
 
-    # Node is Annotated[Union[...], Field(discriminator=...)]
     union_args = get_args(get_args(Node)[0])
     type_names = {arg.__name__ for arg in union_args}
 
-    assert type_names == {"ModuleNode", "FunctionNode", "AdrNode", "PlanNode"}
-    assert not hasattr(models, "ParameterNode")
+    assert type_names == {
+        "ModuleNode",
+        "FunctionNode",
+        "AdrNode",
+        "PlanNode",
+        "ParameterNode",
+    }
+    assert hasattr(models, "ParameterNode")
 
 
-def test_decides_edge_type_remains_deferred_to_pr4() -> None:
-    """Same lock: `decides` is not in the Edge.type Literal until PR4."""
+def test_decides_edge_type_present_post_pr4() -> None:
+    """Forward-compat guard: `decides` IS in Edge.type Literal post-PR4."""
     from typing import get_args
 
     type_field = Edge.model_fields["type"]
     allowed = set(get_args(type_field.annotation))
-    assert allowed == {"depends-on", "references", "supersedes"}
-    assert "decides" not in allowed
+    assert allowed == {"depends-on", "references", "supersedes", "decides"}
 
 
-def test_adr_extra_fields_rejected() -> None:
-    """extra='forbid' guards against PR4 fields slipping in early."""
+def test_parameter_node_round_trip(tmp_path) -> None:
+    """ParameterNode round-trips through the discriminated union + JSON I/O."""
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    now = datetime(2026, 5, 16, tzinfo=timezone.utc)
+    idx = Index(
+        generated_at=now,
+        generator="epitaxy 0.1.0",
+        repo_root="/tmp/sample",
+        config=IndexConfig(parameters_enabled=True),
+        stats=IndexStats(modules=1, parameters=3, edges=2),
+        nodes=[
+            ModuleNode(
+                id="module:src/m.py",
+                path="src/m.py",
+                provenance="ast",
+                extracted_at=now,
+            ),
+            ParameterNode(
+                id="param:src/m.py::Cls.fit::rank",
+                module="module:src/m.py",
+                scope="Cls.fit",
+                name="rank",
+                value="128",
+                line=24,
+                decided_by=["adr:decisions/x.md"],
+                provenance="ast+comment",
+            ),
+            ParameterNode(
+                id="param:src/m.py::<module>::DEFAULT_RANK",
+                module="module:src/m.py",
+                scope="<module>",
+                name="DEFAULT_RANK",
+                value="64",
+                line=1,
+                provenance="adr-frontmatter",
+            ),
+            ParameterNode(
+                id="param:src/m.py::Cls.fit::lr",
+                module="module:src/m.py",
+                scope="Cls.fit",
+                name="lr",
+                value="1e-3",
+                line=25,
+                provenance="ast+comment+adr-frontmatter",
+            ),
+        ],
+        edges=[
+            Edge.model_validate({
+                "from": "adr:decisions/x.md",
+                "to": "param:src/m.py::Cls.fit::rank",
+                "type": "decides",
+                "source": "frontmatter:decides",
+                "provenance": "frontmatter",
+            }),
+            Edge.model_validate({
+                "from": "adr:decisions/x.md",
+                "to": "param:src/m.py::ghost::removed",
+                "type": "decides",
+                "source": "frontmatter:decides",
+                "provenance": "frontmatter",
+            }),
+        ],
+    )
+    path: Path = tmp_path / "index.json"
+    write_index(idx, path)
+    restored = read_index(path)
+    assert restored == idx
+
+    # Discriminator routes correctly
+    params = [n for n in restored.nodes if isinstance(n, ParameterNode)]
+    assert len(params) == 3
+    provenances = sorted(p.provenance for p in params)
+    assert provenances == [
+        "adr-frontmatter",
+        "ast+comment",
+        "ast+comment+adr-frontmatter",
+    ]
+
+
+def test_decides_edge_dangling_target_round_trip(tmp_path) -> None:
+    """SCHEMA §6 (PR4 amendment): decides edges persist even when target
+    parameter is absent — same drift-signal rule as supersedes."""
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 5, 16, tzinfo=timezone.utc)
+    idx = Index(
+        generated_at=now,
+        generator="epitaxy 0.1.0",
+        repo_root="/tmp/sample",
+        config=IndexConfig(parameters_enabled=True),
+        stats=IndexStats(adrs=1, edges=1),
+        nodes=[
+            AdrNode(
+                id="adr:decisions/x.md",
+                path="decisions/x.md",
+                title="t",
+                decides=["param:src/m.py::ghost::removed"],
+                provenance="frontmatter+body",
+            ),
+        ],
+        edges=[
+            Edge.model_validate({
+                "from": "adr:decisions/x.md",
+                "to": "param:src/m.py::ghost::removed",
+                "type": "decides",
+                "source": "frontmatter:decides",
+                "provenance": "frontmatter",
+            }),
+        ],
+    )
+    path = tmp_path / "index.json"
+    write_index(idx, path)
+    restored = read_index(path)
+    assert restored == idx
+    # The dangling target is preserved on both the AdrNode field AND the edge
+    assert restored.nodes[0].decides == ["param:src/m.py::ghost::removed"]
+    assert restored.edges[0].to == "param:src/m.py::ghost::removed"
+
+
+def test_adr_decides_field_accepted() -> None:
+    """Forward-compat guard: AdrNode.decides field IS accepted post-PR4.
+
+    Was the PR2-era `test_adr_extra_fields_rejected` which asserted that
+    passing `decides=[...]` to AdrNode raised ValidationError. Flipped in
+    PR4 commit 1 (Codex round-1 High-3 — SCHEMA §2.3 lists decides as an
+    optional field).
+    """
+    adr = AdrNode(
+        id="adr:x",
+        path="x",
+        title="t",
+        provenance="frontmatter+body",
+        decides=["param:src/m.py::foo::rank"],
+    )
+    assert adr.decides == ["param:src/m.py::foo::rank"]
+
+    # Other extra fields are still rejected — only `decides` is now allowed.
     with pytest.raises(ValidationError):
         AdrNode(
             id="adr:x",
             path="x",
             title="t",
             provenance="frontmatter+body",
-            decides=["param:src/m.py::foo::rank"],  # type: ignore[call-arg]
+            not_a_real_field="oops",  # type: ignore[call-arg]
         )
