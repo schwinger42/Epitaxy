@@ -4,9 +4,21 @@
 
 ## Project
 
-**Epitaxy** — a 4-pillar framework for ML codebase intent. Process-of-Record explorer that captures the *why* behind ML pipelines, not just the *what*. MCP-native, solo-engineer scale.
+**Epitaxy** — a 4-pillar Process-of-Record framework for AI-assisted applied science and ML engineering. It captures the *why* behind research / engineering projects, not just the *what*. MCP-native, solo-practitioner scale.
 
 Public repo: https://github.com/schwinger42/Epitaxy
+
+## Product thesis
+
+Epitaxy's core user is not only a software engineer with a messy repo. It is also the domain expert, applied scientist, ML engineer, or industrial R&D practitioner using Claude Code / Codex to connect AI, ML, LLMs, simulations, instruments, data pipelines, and reports into a long-running project.
+
+The failure mode Epitaxy exists to prevent is **loss of research / engineering intent**:
+
+- An agent can read code but still miss physical constraints, chemical assumptions, mathematical boundaries, instrument settings, sample provenance, validation rules, downstream claims, and "why this was done this way."
+- Standard SWE discipline (specs, plans, TDD, worktrees, code review, agent skills) helps execution, but does not by itself preserve domain-constrained reasoning.
+- Epitaxy is the Process-of-Record / truth layer that AI agents query before changing code, data workflows, parameters, protocols, docs, or claims.
+
+Do not narrow the product framing back to "documentation generator", "token saver", "organized markdown", "code search", or "Claude Code memory." Those are implementation conveniences. The product is a scalable POR layer for AI-assisted applied science and ML engineering.
 
 ## Status
 
@@ -52,6 +64,8 @@ Subpackages scaffolded by PR1 — extend in place per PR scope, don't reshape di
 3. **No `Co-Authored-By: Claude` trailers in commits.** Repo is the author's interview portfolio (Nvidia / Anthropic / ByteDance audience). AI co-author tags signal heavy AI dependency. Default: no trailer. Exception: the first commit (`ddb09a5`) has a trailer — kept because rewriting day-1 history wasn't worth the cost. All subsequent commits: no trailer.
 
 4. **README must match shipped reality.** Anti-pattern: promising v2/v3 always-on dev infrastructure in README when current code can't deliver it. Forward-looking framing lives in `docs/ROADMAP.md`, never in README. Two-layer narrative: README front door = honest scope; ROADMAP back door = depth.
+
+5. **Execution methodology is not the moat.** Tools such as Superpowers can make an agent behave like a disciplined junior SWE (brainstorm, spec, TDD, subagents, review). Epitaxy's moat is different: preserving and querying the domain Process-of-Record so agents do not violate project intent, physical constraints, data provenance, validation boundaries, or downstream claims while iterating.
 
 ## Current focus
 
