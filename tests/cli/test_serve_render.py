@@ -216,3 +216,162 @@ def test_auto_open_script_handles_hashchange(rendered_html: str) -> None:
 def test_meta_viewport_present(rendered_html: str) -> None:
     """Mobile responsiveness gate — viewport meta required."""
     assert 'name="viewport"' in rendered_html
+
+
+# --------------------------------------------------------------------------- #
+# PR4 (Codex code-time High-1): ParameterNode + decides rendering             #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def rendered_html_with_params(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """Like `rendered_html` but runs `epi sync --parameters` so the fixture's
+    parameter nodes + decides edges appear in the rendered HTML."""
+    dest = tmp_path / "repo"
+    shutil.copytree(FIXTURE, dest)
+    monkeypatch.chdir(dest)
+    result = runner.invoke(app, ["sync", "--parameters", "--quiet"])
+    assert result.exit_code == 0, result.output
+    return render_index(read_index(dest / ".epitaxy" / "index.json"))
+
+
+@pytest.fixture
+def soup_with_params(rendered_html_with_params: str) -> BeautifulSoup:
+    return BeautifulSoup(rendered_html_with_params, "html.parser")
+
+
+def test_parameters_section_present_when_index_has_parameters(
+    soup_with_params: BeautifulSoup,
+) -> None:
+    section = soup_with_params.find("section", id="parameters")
+    assert section is not None
+    assert section.find("h2") is not None
+
+
+def test_parameters_section_absent_when_index_has_no_parameters(
+    soup: BeautifulSoup,
+) -> None:
+    """Without --parameters, no parameter nodes exist → no section emitted."""
+    assert soup.find("section", id="parameters") is None
+
+
+def test_nav_links_to_parameters_section_when_present(
+    soup_with_params: BeautifulSoup,
+) -> None:
+    nav = soup_with_params.find("nav")
+    hrefs = {a["href"] for a in nav.find_all("a", href=True)}
+    assert "#parameters" in hrefs
+
+
+def test_each_parameter_renders_as_details_with_name_and_value(
+    soup_with_params: BeautifulSoup,
+) -> None:
+    section = soup_with_params.find("section", id="parameters")
+    param_blocks = section.find_all("details", class_="node-parameter")
+    # Fixture has: rank (composite), DEFAULT_RANK, sample_temperature_K, learning_rate
+    assert len(param_blocks) == 4
+    for block in param_blocks:
+        summary = block.find("summary")
+        assert summary is not None
+        path_span = summary.find("span", class_="path")
+        assert path_span is not None
+        # Value appears in summary as a code span
+        assert summary.find("code", class_="param-value") is not None
+
+
+def test_parameter_detail_includes_required_fields(
+    soup_with_params: BeautifulSoup,
+) -> None:
+    """Each parameter's body has scope, line, value, provenance, module."""
+    section = soup_with_params.find("section", id="parameters")
+    rank_block = next(
+        b for b in section.find_all("details") if "rank" in b.find("summary").get_text()
+        and "DEFAULT" not in b.find("summary").get_text()
+    )
+    detail_text = rank_block.find("div", class_="parameter-detail").get_text()
+    assert "M.fit" in detail_text  # scope
+    assert "128" in detail_text  # value
+    assert "ast+comment+adr-frontmatter" in detail_text  # composite provenance
+
+
+def test_decided_by_links_to_adrs(
+    soup_with_params: BeautifulSoup,
+) -> None:
+    """rank has decided_by [2026-02, 2026-04]; both should be linked."""
+    section = soup_with_params.find("section", id="parameters")
+    rank_block = next(
+        b for b in section.find_all("details") if "rank" in b.find("summary").get_text()
+        and "DEFAULT" not in b.find("summary").get_text()
+    )
+    # The decided_by list should link to both ADR anchors
+    detail = rank_block.find("div", class_="parameter-detail")
+    anchor_targets = [a.get_text() for a in detail.find_all("a", href=True)]
+    assert any("2026-04-rank-dim" in t for t in anchor_targets)
+    assert any("2026-02-rank-baseline" in t for t in anchor_targets)
+
+
+def test_adr_decides_edges_rendered_in_adr_detail(
+    soup_with_params: BeautifulSoup,
+) -> None:
+    """ADR detail blocks now include a 'Decides' section listing param targets."""
+    adrs_section = soup_with_params.find("section", id="adrs")
+    adr_04 = next(
+        b for b in adrs_section.find_all("details")
+        if "2026-04-rank-dim" in b.find("summary").get_text()
+    )
+    detail_text = adr_04.find("div", class_="adr-detail").get_text()
+    assert "Decides" in detail_text
+    assert "rank" in detail_text
+    assert "learning_rate" in detail_text
+
+
+def test_dangling_decides_target_renders_as_missing_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SCHEMA §6 PR4 amendment: dangling decides target (parameter doesn't
+    exist) renders as <span class="missing-target"> per Codex code-time
+    High-1's contract concern. PR3 missing-target rendering applies to
+    decides too."""
+    dest = tmp_path / "repo"
+    shutil.copytree(FIXTURE, dest)
+    monkeypatch.chdir(dest)
+    # Add an ADR whose `decides:` points at a parameter that doesn't exist
+    # in source. Parameter extraction won't emit a node for it; the decides
+    # edge persists per SCHEMA §6.
+    (dest / "decisions" / "ghost-decides.md").write_text(
+        "---\n"
+        "title: ghost decider\n"
+        "decides:\n"
+        "  - param:src/sample/model.py::M.fit::removed_param\n"
+        "---\n"
+        "# ghost\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["sync", "--parameters", "--quiet"])
+    assert result.exit_code == 0, result.output
+    html = render_index(read_index(dest / ".epitaxy" / "index.json"))
+    soup_ = BeautifulSoup(html, "html.parser")
+
+    # The ghost ADR's Decides section should contain a missing-target span
+    # for the removed parameter.
+    ghost_adr = next(
+        b for b in soup_.find_all("details")
+        if "ghost-decides" in b.find("summary").get_text()
+    )
+    missing_spans = ghost_adr.find_all("span", class_="missing-target")
+    assert len(missing_spans) >= 1
+    assert any("removed_param" in s.get_text() for s in missing_spans)
+
+
+def test_header_counts_include_parameters(
+    rendered_html_with_params: str,
+) -> None:
+    """Header summary line includes parameter count."""
+    assert "4 parameters" in rendered_html_with_params
+
+
+def test_header_counts_show_zero_parameters_when_absent(
+    rendered_html: str,
+) -> None:
+    """Without --parameters, the header still includes the count (zero)."""
+    assert "0 parameters" in rendered_html
