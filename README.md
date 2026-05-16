@@ -48,7 +48,7 @@ Epitaxy treats your project like a semiconductor wafer — layer by layer:
 
 ## Status
 
-🚧 **v0 in development** — core read-only POR pieces have landed; parameter extraction and hardening are in progress.
+🚧 **v0 in development** — all SCHEMA-default + opt-in parser pieces have landed (PR1–PR4); final hardening + HN-launch polish remain.
 🎯 **v0 ship target:** June 2026.
 
 What v0 includes / will include:
@@ -58,7 +58,7 @@ What v0 includes / will include:
 - [x] CLI: `epi sync` / `epi serve` / `epi mcp` — _spec'd: [docs/CLI.md](docs/CLI.md)_
 - [x] MCP server (read-only): `por_explain` / `por_trace` / `por_lineage` — _spec'd: [docs/MCP.md](docs/MCP.md)_
 - [x] Static semantic HTML drill-down site (Pillar 3)
-- [ ] Parameter extraction opt-in (`epi sync --parameters`)
+- [x] Parameter extraction opt-in (`epi sync --parameters`) — ML hyperparameters + domain-constrained values (instrument settings, physical constraints, etc.)
 
 Beyond v0 (if traction):
 - [ ] Interactive graph UI (ReactFlow / Cytoscape)

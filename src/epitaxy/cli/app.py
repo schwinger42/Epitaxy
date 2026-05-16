@@ -134,7 +134,13 @@ def sync(
     parameters: bool = typer.Option(
         False,
         "--parameters",
-        help="Enable parameter extraction (not implemented in PR1 — fails fast).",
+        help=(
+            "Enable opt-in parameter extraction. Emits ParameterNode "
+            "per SCHEMA §2.5 from `# epitaxy:param`-marked assignments "
+            "AND from assignments claimed by an ADR's `decides:` "
+            "frontmatter. Off by default (parameter nodes are noisy without "
+            "user-signal markers per SCHEMA §1.3)."
+        ),
     ),
     roots: Optional[list[str]] = typer.Option(
         None,

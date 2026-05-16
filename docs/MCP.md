@@ -215,12 +215,16 @@ Output (excerpted):
       "status": "superseded"
     }
   ],
+  "parallel_heads": [],
+  "notes": [],
   "provenance": {
     "parameter": "ast+comment",
     "decisions": ["frontmatter:decides", "frontmatter:supersedes"]
   }
 }
 ```
+
+(Both `parallel_heads` and `notes` are always-present arrays per the field-notes contract above; they're empty in this single-head clean-walk example.)
 
 ### Errors
 
