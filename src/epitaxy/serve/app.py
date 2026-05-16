@@ -44,6 +44,7 @@ from epitaxy.store.models import (
     FunctionNode,
     ModuleNode,
     Node,
+    ParameterNode,
     PlanNode,
 )
 
@@ -186,6 +187,10 @@ code, .path {
   font-size: 0.92em;
 }
 code { background: var(--code-bg); padding: 0.05em 0.3em; border-radius: 3px; }
+.param-value {
+  color: var(--accent);
+  margin-left: 0.5rem;
+}
 dl.por dt, dl.frontmatter dt {
   font-weight: 600;
   color: var(--muted);
@@ -280,6 +285,7 @@ def _render_header(index: Index, counts: dict[str, int]) -> str:
         f"generator: {_esc(index.generator)}</p>"
         f'<p>{counts["modules"]} modules · {counts["functions"]} functions · '
         f'{counts["adrs"]} ADRs · {counts["plans"]} plans · '
+        f'{counts["parameters"]} parameters · '
         f'{counts["edges"]} edges</p>'
         "</header>"
     )
@@ -292,6 +298,10 @@ def _render_nav(counts: dict[str, int]) -> str:
         parts.append(f'<li><a href="#adrs">{counts["adrs"]} ADRs</a></li>')
     if counts["plans"]:
         parts.append(f'<li><a href="#plans">{counts["plans"]} plans</a></li>')
+    if counts["parameters"]:
+        parts.append(
+            f'<li><a href="#parameters">{counts["parameters"]} parameters</a></li>'
+        )
     parts.append("</ul></nav>")
     return "".join(parts)
 
@@ -493,6 +503,72 @@ def _render_adr(
         )
     )
 
+    # PR4 (Codex code-time High-1): decides edges — ADRs → parameters.
+    # Renders both resolved targets (link) and dangling targets (plain text
+    # + "target not in index" indicator per SCHEMA §6 amendment).
+    out_decides = [e for e in edges_from.get(adr.id, []) if e.type == "decides"]
+    parts.append(
+        _render_edge_list(
+            "Decides", out_decides, direction="out", node_by_id=node_by_id
+        )
+    )
+
+    parts.append("</div></details>")
+    return "".join(parts)
+
+
+def _render_parameter(
+    param: ParameterNode,
+    *,
+    edges_from: dict[str, list[Edge]],
+    edges_to: dict[str, list[Edge]],
+    node_by_id: dict[str, Node],
+) -> str:
+    """Render a ParameterNode as <details> with name/value/scope/line/
+    decided_by/provenance fields per SCHEMA §2.5.
+
+    PR4 (Codex code-time High-1). The renderer applies uniformly to ML
+    hyperparameters (`rank`) and domain-constrained values
+    (`sample_temperature_K`) per [[feedback_epitaxy_product_framing]].
+    """
+    anchor = _anchor_for(param.id)
+    parts: list[str] = [
+        f'<details id="{anchor}" class="node-parameter">',
+        '<summary>',
+        f'<span class="path">{_esc(param.name)}</span>',
+        f'<code class="param-value">= {_esc(param.value)}</code>',
+        "</summary>",
+        '<div class="parameter-detail">',
+    ]
+
+    fm_rows: list[str] = [
+        f"<dt>scope</dt><dd><code>{_esc(param.scope)}</code></dd>",
+        f"<dt>line</dt><dd>{param.line}</dd>",
+        f"<dt>value</dt><dd><code>{_esc(param.value)}</code></dd>",
+        f"<dt>provenance</dt><dd>{_esc(param.provenance)}</dd>",
+        f"<dt>module</dt><dd>{_render_node_ref(param.module, node_by_id)}</dd>",
+    ]
+    if param.decided_by:
+        decided_links = "".join(
+            f"<li>{_render_node_ref(adr_id, node_by_id)}</li>"
+            for adr_id in param.decided_by
+        )
+        fm_rows.append(
+            f"<dt>decided_by</dt><dd><ul>{decided_links}</ul></dd>"
+        )
+    parts.append('<dl class="frontmatter">' + "".join(fm_rows) + "</dl>")
+
+    # Incoming decides edges — ADRs that decide this parameter.
+    # decided_by above covers RESOLVED ADRs; the edge list also surfaces any
+    # dangling-target case if it could happen (parameter referenced by an
+    # ADR's decides: but with mismatched ID — rare; defensive).
+    in_decides = [e for e in edges_to.get(param.id, []) if e.type == "decides"]
+    parts.append(
+        _render_edge_list(
+            "Decided by (edges)", in_decides, direction="in", node_by_id=node_by_id
+        )
+    )
+
     parts.append("</div></details>")
     return "".join(parts)
 
@@ -549,6 +625,7 @@ def render_index(index: Index) -> str:
     functions = [n for n in index.nodes if isinstance(n, FunctionNode)]
     adrs = [n for n in index.nodes if isinstance(n, AdrNode)]
     plans = [n for n in index.nodes if isinstance(n, PlanNode)]
+    parameters = [n for n in index.nodes if isinstance(n, ParameterNode)]
 
     functions_by_module: dict[str, list[FunctionNode]] = {}
     for fn in functions:
@@ -567,6 +644,7 @@ def render_index(index: Index) -> str:
         "functions": len(functions),
         "adrs": len(adrs),
         "plans": len(plans),
+        "parameters": len(parameters),
         "edges": len(index.edges),
     }
 
@@ -613,6 +691,21 @@ def render_index(index: Index) -> str:
             parts.append(
                 _render_plan(
                     plan,
+                    edges_from=edges_from,
+                    edges_to=edges_to,
+                    node_by_id=node_by_id,
+                )
+            )
+        parts.append("</section>")
+
+    # PR4 (Codex code-time High-1): ParameterNode section. Sorts by
+    # (module, scope, line) for stable visual ordering by source location.
+    if parameters:
+        parts.append('<section id="parameters"><h2>Parameters</h2>')
+        for param in sorted(parameters, key=lambda p: (p.module, p.scope, p.line)):
+            parts.append(
+                _render_parameter(
+                    param,
                     edges_from=edges_from,
                     edges_to=edges_to,
                     node_by_id=node_by_id,

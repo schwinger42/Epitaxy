@@ -15,6 +15,7 @@ import typer
 
 from epitaxy import __version__
 from epitaxy.parser import extract_references, parse_markdown, parse_repo
+from epitaxy.parser.refs import populate_decided_by
 from epitaxy.store import Index, IndexConfig, IndexStats, write_index
 
 
@@ -133,7 +134,13 @@ def sync(
     parameters: bool = typer.Option(
         False,
         "--parameters",
-        help="Enable parameter extraction (not implemented in PR1 — fails fast).",
+        help=(
+            "Enable opt-in parameter extraction. Emits ParameterNode "
+            "per SCHEMA §2.5 from `# epitaxy:param`-marked assignments "
+            "AND from assignments claimed by an ADR's `decides:` "
+            "frontmatter. Off by default (parameter nodes are noisy without "
+            "user-signal markers per SCHEMA §1.3)."
+        ),
     ),
     roots: Optional[list[str]] = typer.Option(
         None,
@@ -160,48 +167,65 @@ def sync(
     if parameters:
         config = config.model_copy(update={"parameters_enabled": True})
 
-    # Fail-fast AFTER config + CLI flag merge — both `--parameters` AND
-    # `[tool.epitaxy] parameters_enabled = true` route to the same effective
-    # value and must trip the same error. Codex review High-1 caught that
-    # checking only the CLI flag reintroduces silent no-op through config.
-    if config.parameters_enabled:
-        typer.echo(
-            "error: parameter extraction is not implemented in this build "
-            "(PR1 tracer-bullet). Tracking in PR4.",
-            err=True,
-        )
-        raise typer.Exit(2)
-
     py_files = _resolve_files(repo_root, config.roots, config.excludes)
     package_roots = _package_roots_from_globs(config.roots)
 
     if verbose:
-        typer.echo(
+        msg = (
             f"parsing {len(py_files)} file(s) from roots={config.roots} "
-            f"(package_roots={package_roots})",
-            err=True,
+            f"(package_roots={package_roots})"
         )
+        if config.parameters_enabled:
+            msg += " [--parameters: extracting parameters from `# epitaxy:param` markers + ADR decides:]"
+        typer.echo(msg, err=True)
 
-    py_nodes, py_edges, py_errors, py_bodies = parse_repo(
-        repo_root, py_files, package_roots=package_roots
-    )
-    md_nodes, md_edges, md_errors, md_bodies = parse_markdown(
-        repo_root, adr_dir=config.adr_dir, plan_dir=config.plan_dir
-    )
+    # Pipeline order depends on parameters_enabled per Codex round-1 High-2:
+    # when extracting parameters, markdown MUST run first so parser/python
+    # can read the ADR-decides-claimed-set (SCHEMA §2.5 OR clause).
+    # When parameters_enabled=False, order is python-first (matches PR3
+    # behavior for stability; refs final-pass is order-independent).
+    if config.parameters_enabled:
+        md_nodes, md_edges, md_errors, md_bodies, decides_claimed = parse_markdown(
+            repo_root,
+            adr_dir=config.adr_dir,
+            plan_dir=config.plan_dir,
+            parameters_enabled=True,
+        )
+        py_nodes, py_edges, py_errors, py_bodies = parse_repo(
+            repo_root,
+            py_files,
+            package_roots=package_roots,
+            parameters_enabled=True,
+            decides_claimed=decides_claimed,
+        )
+    else:
+        py_nodes, py_edges, py_errors, py_bodies = parse_repo(
+            repo_root, py_files, package_roots=package_roots
+        )
+        md_nodes, md_edges, md_errors, md_bodies, _ = parse_markdown(
+            repo_root, adr_dir=config.adr_dir, plan_dir=config.plan_dir
+        )
 
     nodes = [*py_nodes, *md_nodes]
     edges = [*py_edges, *md_edges]
     parse_errors = [*py_errors, *md_errors]
 
-    # Final pass: references edges from markdown links in docstring + ADR/plan
-    # bodies, resolved against the union of all emitted nodes. Per Codex
-    # round-1 High-1, this MUST run last so docstring→ADR / ADR→plan links
-    # resolve. Per Codex round-2 High-2, the target index includes adr/plan
-    # node IDs, not just module/function.
+    # Final-pass 1: references edges from markdown links in docstring +
+    # ADR/plan bodies, resolved against the union of all emitted nodes.
+    # Per Codex round-1 High-1 (PR2), this MUST run last so docstring→ADR
+    # / ADR→plan links resolve. Per Codex round-2 High-2 (PR2), the target
+    # index includes adr/plan node IDs, not just module/function.
     ref_edges = extract_references(
         repo_root, nodes, [*py_bodies, *md_bodies]
     )
     edges.extend(ref_edges)
+
+    # Final-pass 2 (PR4): populate ParameterNode.decided_by by walking
+    # decides edges. Mutates ParameterNodes in-place. Only populates when
+    # the target parameter exists in the index — dangling decides edges
+    # (SCHEMA §6 amendment) leave decided_by=None at the node level; the
+    # drift signal is preserved at the edge level.
+    populate_decided_by(nodes, edges)
 
     for err in parse_errors:
         typer.echo(f"warning: failed to parse {err.path}: {err.reason}", err=True)
@@ -211,6 +235,7 @@ def sync(
         functions=sum(1 for n in nodes if n.type == "function"),
         adrs=sum(1 for n in nodes if n.type == "adr"),
         plans=sum(1 for n in nodes if n.type == "plan"),
+        parameters=sum(1 for n in nodes if n.type == "parameter"),
         edges=len(edges),
     )
 
@@ -240,12 +265,15 @@ def sync(
         )
 
     if not quiet:
-        typer.echo(
+        summary = (
             f"wrote {out_path} "
             f"({stats.modules} modules, {stats.functions} functions, "
-            f"{stats.adrs} ADRs, {stats.plans} plans, {stats.edges} edges)",
-            err=True,
+            f"{stats.adrs} ADRs, {stats.plans} plans"
         )
+        if stats.parameters:
+            summary += f", {stats.parameters} parameters"
+        summary += f", {stats.edges} edges)"
+        typer.echo(summary, err=True)
 
     # CLI.md §7: exit 3 when one or more files failed to parse but a partial
     # index was still written. Lets CI treat this as 'warn but proceed'.

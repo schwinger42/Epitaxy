@@ -2,6 +2,8 @@
 title: Initial ALS rank — baseline at 64
 status: superseded
 date: 2026-02-15
+decides:
+  - param:src/sample/model.py::M.fit::rank
 ---
 
 # Initial ALS rank — baseline at 64

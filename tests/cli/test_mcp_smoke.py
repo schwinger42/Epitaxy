@@ -79,13 +79,18 @@ def test_por_explain_raises_node_not_found_for_unknown_id():
     assert "[code:-32001]" in excinfo.value.error.message
 
 
-def test_por_trace_raises_parameter_parsing_disabled_when_no_parameters():
-    """Dominant PR1 case — no parameter nodes in index."""
+def test_por_trace_raises_parameter_parsing_disabled_when_config_disabled():
+    """PR4 (Codex round-1 High-4): por_trace gates on
+    `index.config.parameters_enabled`, NOT on the presence of parameter
+    nodes. _tiny_index() has `parameters_enabled=False` (the default), so
+    any por_trace call raises ParameterParsingDisabled with the new
+    config-aware message.
+    """
     with pytest.raises(McpError) as excinfo:
         por_trace_impl(_tiny_index(), "param:foo.py::x::y")
     assert excinfo.value.error.code == ERR_PARAMETER_PARSING_DISABLED
+    assert "parameters_enabled = false" in excinfo.value.error.message
     assert "epi sync --parameters" in excinfo.value.error.message
-    assert "PR4" in excinfo.value.error.message
 
 
 def test_por_lineage_always_raises_asset_type_not_supported():

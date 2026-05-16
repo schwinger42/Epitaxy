@@ -1,8 +1,27 @@
-"""Python AST parser → module + function nodes + depends-on edges.
+"""Python AST parser → module + function + parameter nodes + depends-on edges.
 
-PR1 scope (tracer-bullet) per docs/SCHEMA.md §2.1, §2.2, §3.
-PR2 adds POR docstring frontmatter via parser.por — `node.por` is now
-populated when the docstring opens with `---…---`.
+PR1 scope: module + function nodes + depends-on edges (per SCHEMA §2.1, §2.2, §3).
+PR2 scope: POR docstring frontmatter (parser/por.py) — `node.por` populated
+when docstring opens with `---…---`.
+PR4 scope: opt-in parameter extraction (`epi sync --parameters`) via
+two signals per SCHEMA §2.5:
+
+  (a) `# epitaxy:param` comment on the assignment line — strict
+      physical-line recognition (Codex round-1 Med-9).
+  (b) Candidate parameter ID present in the `decides_claimed` set
+      collected from ADR `decides:` frontmatter by parser/markdown.py
+      (the SCHEMA §2.5 OR clause).
+
+Both signals present → composite provenance "ast+comment+adr-frontmatter"
+(SCHEMA §2.5 amended in PR4 commit 1).
+
+This applies broadly: `rank = 128` (ML hyperparameter) and
+`sample_temperature_K = 77  # epitaxy:param` (physical constraint from
+applied science) are equally first-class. Epitaxy preserves tuned-value
+intent across ML AND domain-constrained values — instrument settings,
+chemical thresholds, mathematical bounds, validation requirements,
+physical constants. See [[feedback_epitaxy_product_framing]] for the
+broader product framing.
 
 Function-call resolution heuristics — explicit boundaries locked by tests:
 
@@ -25,13 +44,23 @@ pollute the outer function's edge list (Codex review High Med-3).
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..store.models import Edge, FunctionNode, ModuleNode, Node
+import re
+
+from ..store.models import Edge, FunctionNode, ModuleNode, Node, ParameterNode
 from .por import PORParseError, parse_docstring as parse_por_docstring
 from .refs import BodyRecord
+
+
+_EPITAXY_PARAM_RE = re.compile(r"#\s*epitaxy:param(?:\s|$)")
+"""Tight regex per Codex round-1 Low-10: rejects `# epitaxy:params` (typo)
+and `# epitaxy:param-extra` (suffix). Only exact marker followed by
+whitespace or end-of-line counts.
+"""
 
 
 @dataclass(frozen=True)
@@ -176,12 +205,205 @@ def _resolve_call(
     return None
 
 
+def parameter_id(rel_path: str, scope: str, name: str) -> str:
+    """Canonical ParameterNode ID per SCHEMA §2.5: `param:<path>::<scope>::<name>`.
+
+    `scope` is the function qualname (e.g. `"Ranker.fit"`) for function-body
+    assignments, or the literal sentinel `"<module>"` for module-level
+    assignments. The angle-bracket sentinel cannot collide with a real
+    Python identifier.
+    """
+    return f"param:{rel_path}::{scope}::{name}"
+
+
+_AssignNode = ast.Assign | ast.AnnAssign
+
+
+def _single_name_target(assign: _AssignNode) -> str | None:
+    """Return the assigned name when the LHS is a single bare Name, else None.
+
+    Skips: tuple-LHS (`a, b = 1, 2`), AugAssign (handled by isinstance check
+    upstream — AugAssign is excluded from the candidate set), Subscript-LHS
+    (`d['k'] = v`), Starred (`*rest = ...`), Attribute (`self.x = v`),
+    multi-target (`a = b = 1`).
+    """
+    if isinstance(assign, ast.AnnAssign):
+        return assign.target.id if isinstance(assign.target, ast.Name) else None
+    # ast.Assign — possibly multi-target. Require single target that is Name.
+    if len(assign.targets) != 1:
+        return None
+    target = assign.targets[0]
+    return target.id if isinstance(target, ast.Name) else None
+
+
+def _render_value(source_text: str, value_node: ast.expr) -> str:
+    """Verbatim source-text RHS via `ast.get_source_segment`, fallback to
+    `ast.unparse` for synthetic nodes (Codex round-1 Med-5).
+
+    MCP §3 contract says `current_value` is shown to LLM consumers as-is.
+    `ast.unparse(value_node)` normalizes literals (`1e-3` → `0.001`), which
+    misleads. `ast.get_source_segment` preserves source-as-written.
+
+    Caller is responsible for filtering AnnAssign-without-value before
+    reaching here — at the call site `value_node` is always a real
+    `ast.expr` subclass.
+    """
+    segment = ast.get_source_segment(source_text, value_node)
+    if segment is not None:
+        return segment
+    return ast.unparse(value_node)
+
+
+def _iter_assignments_in_body(
+    body: list[ast.stmt],
+) -> "Iterator[_AssignNode]":
+    """Yield ast.Assign / ast.AnnAssign with value-not-None nodes directly
+    inside `body`. Does NOT recurse into nested function / class bodies.
+    """
+    for stmt in body:
+        if isinstance(stmt, ast.AnnAssign):
+            if stmt.value is not None:  # `x: int = 1` (skip bare `x: int`)
+                yield stmt
+        elif isinstance(stmt, ast.Assign):
+            yield stmt
+
+
+def _extract_parameters(
+    source_text: str,
+    tree: ast.Module,
+    rel_path: str,
+    *,
+    decides_claimed: set[str],
+) -> list[ParameterNode]:
+    """Extract ParameterNode list per SCHEMA §2.5 OR clause.
+
+    Two signals per SCHEMA §2.5; a candidate assignment becomes a
+    ParameterNode if EITHER applies:
+
+    (a) Source line `source_lines[assign.lineno - 1]` matches the
+        `# epitaxy:param` marker (strict physical-line per Codex
+        round-1 Med-9; continuation-line markers are NOT recognized).
+    (b) Candidate parameter ID is in `decides_claimed` (the union of
+        validated `decides:` entries across all ADRs from
+        parser/markdown.py).
+
+    Composite case (both signals): provenance is
+    `"ast+comment+adr-frontmatter"` per SCHEMA §2.5 (amended in PR4 C1
+    to bless the composite vocab).
+
+    Scope is `"<module>"` for module-level assignments OR the function
+    qualname (`"foo"` / `"Cls.method"`) for function/method bodies.
+    Class-body assignments BETWEEN methods (rare; ambiguous semantics)
+    are skipped — v0 emits only the high-signal cases.
+
+    Domain scope: `# epitaxy:param` marks both ML hyperparameters
+    (`rank = 128`) and domain-constrained values (`sample_temperature_K
+    = 77`, `chamber_pressure_Torr = 1e-6`, `validation_threshold = 0.95`).
+    Epitaxy preserves intent across both audiences — see
+    [[feedback_epitaxy_product_framing]].
+    """
+    source_lines = source_text.split("\n")
+    parameters: list[ParameterNode] = []
+
+    # Codex code-time Med-2 fix: build a map of (line_no → rightmost
+    # col_offset of any candidate assignment on that line) so we can
+    # disambiguate semicolon-stacked assignments. The trailing
+    # `# epitaxy:param` comment belongs to the rightmost assignment only
+    # (the one closest to the comment); other assignments on the same
+    # line are not marked.
+    rightmost_col_per_line: dict[int, int] = {}
+
+    def _record(assign: _AssignNode) -> None:
+        line_no = assign.lineno
+        col = assign.col_offset
+        if rightmost_col_per_line.get(line_no, -1) < col:
+            rightmost_col_per_line[line_no] = col
+
+    for assign in _iter_assignments_in_body(tree.body):
+        _record(assign)
+    for _qn, fdef, _line in _walk_functions(tree):
+        for assign in _iter_assignments_in_body(fdef.body):
+            _record(assign)
+
+    def _consider(
+        assign: _AssignNode,
+        scope: str,
+        module_node_id: str,
+    ) -> None:
+        name = _single_name_target(assign)
+        if name is None:
+            return  # tuple-LHS / Subscript-LHS / Starred / Attribute etc.
+        # Skip annotation-only `x: int` (no value)
+        if isinstance(assign, ast.AnnAssign) and assign.value is None:
+            return
+        value_node = assign.value
+        if value_node is None:
+            return
+
+        line_no = assign.lineno
+        if line_no < 1 or line_no > len(source_lines):
+            return  # defensive
+        source_line = source_lines[line_no - 1]
+
+        # Codex code-time Med-2: if there's a `# epitaxy:param` marker on
+        # this physical line, it belongs to the RIGHTMOST assignment on
+        # the line. Other assignments on the same line (semicolon-stacked
+        # `a = 1; b = 2  # epitaxy:param` case) don't get the marker.
+        has_comment = bool(_EPITAXY_PARAM_RE.search(source_line))
+        if has_comment and assign.col_offset < rightmost_col_per_line.get(
+            line_no, -1
+        ):
+            has_comment = False  # marker belongs to a later assignment
+
+        candidate_id = parameter_id(rel_path, scope, name)
+        has_adr_claim = candidate_id in decides_claimed
+
+        if not (has_comment or has_adr_claim):
+            return
+
+        if has_comment and has_adr_claim:
+            provenance = "ast+comment+adr-frontmatter"
+        elif has_comment:
+            provenance = "ast+comment"
+        else:
+            provenance = "adr-frontmatter"
+
+        parameters.append(
+            ParameterNode(
+                id=candidate_id,
+                module=module_node_id,
+                scope=scope,
+                name=name,
+                value=_render_value(source_text, value_node),
+                line=line_no,
+                provenance=provenance,
+            )
+        )
+
+    mod_id_value = module_id(rel_path)
+
+    # Module-level assignments
+    for assign in _iter_assignments_in_body(tree.body):
+        _consider(assign, scope="<module>", module_node_id=mod_id_value)
+
+    # Function-body + method-body assignments (one level deep — same scope
+    # boundary as _walk_functions; nested-function assignments are skipped
+    # because nested functions aren't addressable through Epitaxy IDs).
+    for qn, fdef, _line in _walk_functions(tree):
+        for assign in _iter_assignments_in_body(fdef.body):
+            _consider(assign, scope=qn, module_node_id=mod_id_value)
+
+    return parameters
+
+
 def parse_repo(
     repo_root: Path,
     py_files: list[Path],
     *,
     package_roots: list[str] | None = None,
     extracted_at: datetime | None = None,
+    parameters_enabled: bool = False,
+    decides_claimed: set[str] | None = None,
 ) -> tuple[list[Node], list[Edge], list[ParseError], list[BodyRecord]]:
     """Parse a set of Python files into intent-graph nodes + edges + parse errors.
 
@@ -205,7 +427,9 @@ def parse_repo(
     roots = list(package_roots or [])
 
     # Pass 1: parse every file, build dotted_name → rel_path map for import resolution
-    parsed: list[tuple[str, str, ast.Module]] = []
+    # PR4: stores source text alongside the AST so `_extract_parameters` can
+    # call `ast.get_source_segment` for verbatim value rendering.
+    parsed: list[tuple[str, str, ast.Module, str]] = []
     dotted_to_rel: dict[str, str] = {}
     errors: list[ParseError] = []
 
@@ -221,7 +445,7 @@ def parse_repo(
             errors.append(ParseError(path=abs_path, reason=f"UnicodeDecodeError: {e}"))
             continue
         dotted = _module_dotted_name(rel_path, roots)
-        parsed.append((rel_path, dotted, tree))
+        parsed.append((rel_path, dotted, tree, source))
         dotted_to_rel[dotted] = rel_path
 
     nodes: list[Node] = []
@@ -230,9 +454,11 @@ def parse_repo(
     seen_edges: set[tuple[str, str, str]] = set()
     all_function_ids: set[str] = set()
     per_module: list[dict] = []
+    claimed_set: set[str] = decides_claimed if decides_claimed is not None else set()
 
-    # Pass 2: emit ModuleNode + FunctionNode for every parsed file; record imports
-    for rel_path, dotted, tree in parsed:
+    # Pass 2: emit ModuleNode + FunctionNode for every parsed file; record imports;
+    # extract parameters when parameters_enabled (PR4).
+    for rel_path, dotted, tree, source in parsed:
         abs_path_for_errors = repo_root / rel_path  # for ParseError attribution
         mod_id = module_id(rel_path)
 
@@ -364,6 +590,16 @@ def parse_repo(
                 imports[alias.name] = target_rel
 
         per_module.append({"rel_path": rel_path, "functions": functions, "imports": imports})
+
+        # PR4: extract parameters when --parameters is on. Runs inside Pass 2
+        # so the parameter nodes interleave with their parent module/function
+        # nodes in the output list (matches PR2/PR3 emission patterns).
+        if parameters_enabled:
+            nodes.extend(
+                _extract_parameters(
+                    source, tree, rel_path, decides_claimed=claimed_set
+                )
+            )
 
     # Pass 3: resolve function calls now that all nodes exist
     same_qns_by_path: dict[str, set[str]] = {

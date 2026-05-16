@@ -10,7 +10,7 @@ This doc fixes the shape before parser implementation begins. Specifically it co
 
 1. **Seven node types** that Epitaxy treats as first-class long-term — covering executable, decision, narrative, and lineage surfaces.
 2. **Four edge types** that wire nodes into a queryable graph.
-3. **v0 parser ships parsing for 4 of the 7 node types** (`module` / `function` / `adr` / `plan`). The remaining 3 (`parameter` / `data_asset` / `decision`) are reserved in the schema so v1+ extensions don't require a breaking format change.
+3. **v0 parser ships parsing for 5 of the 7 node types** — 4 default (`module` / `function` / `adr` / `plan`) plus `parameter` as opt-in via `epi sync --parameters` (PR4). The remaining 2 (`data_asset` / `decision`) are reserved in the schema so v1+ extensions don't require a breaking format change.
 4. **`.epitaxy/index.json`** — the concrete on-disk format that `epi sync` writes and `epi serve` / Pillar-4 MCP tools read.
 
 If this design is wrong, every later pillar pays the cost. If it is right, later pillars become local extensions rather than re-architectures.
@@ -27,7 +27,13 @@ Concretely: nodes have explicit `type` and stable `id`; edges have explicit `fro
 
 The seven node types in §2 are **fixed for v0**. They will not change in v0.x point releases. They define the long-term shape of the graph.
 
-What changes between v0 and v1+ is **how many of those types the parser actually populates**. v0 ships parsing for 4 (`module` / `function` / `adr` / `plan`). The other three (`parameter` / `data_asset` / `decision`) are valid node types in the schema, but the v0 parser does not emit them by default. This separates "what the format supports" from "what today's tool produces" — a distinction any always-on tool needs for forward compatibility.
+What changes between v0 and v1+ is **how many of those types the parser actually populates** and under what conditions. After PR4, the breakdown is:
+
+- **Default `epi sync` emits 4 node types**: `module` / `function` / `adr` / `plan`.
+- **Opt-in `epi sync --parameters` adds 1 more**: `parameter` (PR4; via `# epitaxy:param` markers OR ADR `decides:` frontmatter per §2.5).
+- **Reserved for v1+**: `data_asset` (lineage tracking; gated on DAG-runtime integration) and `decision` (atomic sub-ADR nodes; gated on finer-grained drift detection needs).
+
+This separates "what the format supports" (all 7 types) from "what today's tool produces by default" (4) from "what today's tool produces opt-in" (5) from "what later versions add" (7) — a distinction any always-on tool needs for forward compatibility.
 
 ### 1.3 Parameter extraction is opt-in
 
@@ -151,7 +157,7 @@ Fields:
 | `value` | string | yes | source-rendered RHS (not evaluated) |
 | `line` | int | yes | |
 | `decided_by` | string[] | no | ADR IDs that decide this value |
-| `provenance` | string | yes | `ast+comment` or `adr-frontmatter` |
+| `provenance` | string | yes | `ast+comment`, `adr-frontmatter`, or `ast+comment+adr-frontmatter` (composite — both signals present on the same assignment) |
 
 ### 2.6 `data_asset` (deferred to v1+)
 
@@ -366,6 +372,8 @@ A default `epi sync` (no `--parameters`) writes:
 ```
 
 Note: the superseded ADR (`adr:decisions/2026-02-rank-baseline.md`) appears as the *target* of a `supersedes` edge even if the file no longer exists in the repo. v0 keeps the edge as a historical reference; v2+ drift detection can flag missing target nodes for cleanup.
+
+The same dangling-target rule applies to **`decides` edges**: an ADR may reference a parameter that no longer exists in source (renamed, removed, or refactored out). v0 emits the `decides` edge anyway — the dangling edge is *drift signal*, not a parse error. `por_explain` callers see the dangling target through normal incident-edge enumeration; the Pillar-3 drill-down site renders unresolvable edge targets via plain text rather than a broken anchor. The rule symmetrically covers both `supersedes` and `decides` because both represent historical / cross-cutting references where the target's continued existence is an evolution-of-the-graph concern, not a structural-validity concern.
 
 ## 7. What v0 deliberately does NOT do
 

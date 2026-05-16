@@ -2,11 +2,12 @@
 
 See docs/SCHEMA.md §2 (nodes), §3 (edges), §5 (index envelope).
 
-PR2 scope (doc-parsing): adds `adr` + `plan` node types; the
-`references` + `supersedes` Edge.type literals (reserved in PR1) are
-now populated by the parser. `parameter` node type + `decides` edge
-type remain deferred to PR4 alongside `--parameters` extraction —
-keeping the surface narrow per Codex round-1 High-2.
+PR4 scope (parameter extraction): adds `ParameterNode` per SCHEMA §2.5,
+`AdrNode.decides` field per SCHEMA §2.3, and `"decides"` to the
+Edge.type Literal per SCHEMA §3. After PR4, the v0 default-emit surface
+is complete: 5 emitted node types (`module` / `function` / `adr` / `plan` /
+`parameter`) + 4 edge types (`depends-on` / `references` / `supersedes` /
+`decides`). Only `data_asset` + `decision` remain reserved for v1+.
 """
 
 from __future__ import annotations
@@ -51,9 +52,9 @@ class FunctionNode(BaseModel):
 class AdrNode(BaseModel):
     """An Architecture Decision Record. See SCHEMA.md §2.3.
 
-    `decides` is intentionally absent — PR2 parser ignores it per the
-    Codex round-1 High-2 deferral; PR4 will add the field alongside
-    `ParameterNode` and the `decides` edge type.
+    `decides` populated from frontmatter regardless of `parameters_enabled`
+    (the field is data per SCHEMA §2.3); `decides` edge emission is gated
+    separately in parser/markdown.py per SCHEMA §3.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -65,6 +66,7 @@ class AdrNode(BaseModel):
     status: str | None = None
     date: str | None = None
     supersedes: str | None = None
+    decides: list[str] | None = None  # parameter IDs (canonical form: param:<path>::<scope>::<name>)
     summary: str | None = None
     provenance: str
 
@@ -83,8 +85,32 @@ class PlanNode(BaseModel):
     provenance: str
 
 
+class ParameterNode(BaseModel):
+    """A tuned parameter — a Python assignment recognized via either
+    `# epitaxy:param` comment or inclusion in an ADR's `decides:` list.
+    See SCHEMA.md §2.5.
+
+    Emitted only when `parameters_enabled` is True (CLI `--parameters` or
+    `[tool.epitaxy].parameters_enabled = true`). Two signals per SCHEMA
+    §2.5; composite provenance value `"ast+comment+adr-frontmatter"`
+    when both apply (SCHEMA §2.5 amendment in PR4).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["parameter"] = "parameter"
+    id: str  # param:<rel_path>::<scope>::<name>
+    module: str  # parent module ID
+    scope: str  # function qualname OR "<module>" for module-level
+    name: str
+    value: str  # verbatim source-text RHS (via ast.get_source_segment); never evaluated
+    line: int
+    decided_by: list[str] | None = None  # ADR IDs that decide this value (populated by parser/refs.py final pass)
+    provenance: str  # "ast+comment", "adr-frontmatter", or "ast+comment+adr-frontmatter"
+
+
 Node = Annotated[
-    Union[ModuleNode, FunctionNode, AdrNode, PlanNode],
+    Union[ModuleNode, FunctionNode, AdrNode, PlanNode, ParameterNode],
     Field(discriminator="type"),
 ]
 
@@ -96,7 +122,7 @@ class Edge(BaseModel):
 
     from_: str = Field(alias="from")
     to: str
-    type: Literal["depends-on", "references", "supersedes"]
+    type: Literal["depends-on", "references", "supersedes", "decides"]
     source: str
     line: int | None = None
     provenance: str

@@ -142,9 +142,29 @@ Conditional tool. Functional when the index was synced with `epi sync --paramete
   "decision_chain": [
     /*
      * ADR nodes that have a `decides` edge to this parameter,
-     * ordered newest-first via the supersedes chain.
-     * Index 0 = currently-active ADR; later entries are historical
-     * (superseded) decisions retained for audit.
+     * ordered newest-first via the supersedes chain rooted at the
+     * lex-first active head. Index 0 = currently-active ADR; later
+     * entries are historical (superseded) decisions retained for audit.
+     */
+  ],
+  "parallel_heads": [
+    /*
+     * Populated when MULTIPLE ADRs decide this parameter AND none is
+     * superseded — i.e. the decision-chain has more than one root.
+     * Empty array otherwise. LLM consumers should treat a non-empty
+     * `parallel_heads` as an ambiguity-signal: the active decision
+     * for this parameter is not unique and may need human triage.
+     * `decision_chain` is still populated with the lex-first head's
+     * chain so single-head consumers can ignore this field.
+     */
+  ],
+  "notes": [
+    /*
+     * Cycle-truncation + no-head warnings, e.g.
+     *   "cycle in supersedes chain involving 'adr:decisions/x.md'
+     *    (already visited); chain truncated at 'adr:decisions/y.md'."
+     * Empty array when no anomalies. Surfaces graph-shape issues so
+     * downstream consumers can flag malformed ADR chains for cleanup.
      */
   ],
   "provenance": {
@@ -156,8 +176,10 @@ Conditional tool. Functional when the index was synced with `epi sync --paramete
 
 Field notes:
 
-- `current_value` — verbatim RHS of the assignment from `parameter.value`, source-rendered. Not evaluated; the LLM sees `"128"` (or `"int(os.environ['RANK'])"`) as-is.
-- `decision_chain` — full ADR nodes (not just IDs) so the LLM can read titles, statuses, and dates without additional `por_explain` calls. Order: currently-accepted ADR first, then chained backwards via `supersedes` edges.
+- `current_value` — verbatim RHS of the assignment from `parameter.value`, source-rendered. Not evaluated; the LLM sees `"128"` (or `"int(os.environ['RANK'])"`) as-is. Per the PR4 implementation this uses `ast.get_source_segment`, so `1e-3` stays `"1e-3"` (NOT `"0.001"` — which `ast.unparse` would produce).
+- `decision_chain` — full ADR nodes (not just IDs) so the LLM can read titles, statuses, and dates without additional `por_explain` calls. Order: currently-accepted ADR first, then chained backwards via `supersedes` edges. When `parallel_heads` is non-empty, the chain is rooted at the lex-first head.
+- `parallel_heads` — ALWAYS present as an array; empty when there's a single active head. Populated when multiple ADRs decide the same parameter and none is superseded by another. LLM consumers reading the TraceResult should check `len(parallel_heads) > 0` to detect ambiguity.
+- `notes` — ALWAYS present as an array; empty when the chain walks cleanly. Populated for cycles in the supersedes graph (chain truncates + a note is emitted) or the no-head edge case (all deciders are themselves superseded; defensive fallback to lex-first relevant ADR).
 
 ### Example
 
@@ -193,6 +215,8 @@ Output (excerpted):
       "status": "superseded"
     }
   ],
+  "parallel_heads": [],
+  "notes": [],
   "provenance": {
     "parameter": "ast+comment",
     "decisions": ["frontmatter:decides", "frontmatter:supersedes"]
@@ -200,12 +224,14 @@ Output (excerpted):
 }
 ```
 
+(Both `parallel_heads` and `notes` are always-present arrays per the field-notes contract above; they're empty in this single-head clean-walk example.)
+
 ### Errors
 
 | Code | Name | When |
 |---|---|---|
-| `-32001` | `NodeNotFound` | `parameter_id` doesn't resolve to any node |
-| `-32002` | `ParameterParsingDisabled` | Index has zero parameter nodes (was synced without `--parameters`). Error message includes hint: `"Re-run \`epi sync --parameters\` to enable."` |
+| `-32001` | `NodeNotFound` | Parameter extraction WAS enabled (`index.config.parameters_enabled == true`) but no node with `parameter_id` exists in the index. Distinct from `ParameterParsingDisabled` — parsing was enabled; this specific ID just isn't there (assignment may not be marked with `# epitaxy:param` or claimed by any ADR's `decides:` frontmatter). |
+| `-32002` | `ParameterParsingDisabled` | `index.config.parameters_enabled == false` — the index was synced without `--parameters`. Error message: `"index was synced without parameter extraction (parameters_enabled = false). Re-run \`epi sync --parameters\` to enable."` Note (PR4): this is gated on the CONFIG flag, not on the actual presence of parameter nodes. An enabled index with zero marked parameters returns `NodeNotFound` for any `parameter_id`, not `ParameterParsingDisabled`. |
 | `-32003` | `NotAParameter` | `parameter_id` resolves, but the node's `type` is not `"parameter"` |
 
 ## 4. `por_lineage(asset_id)` — documented stub in v0
@@ -264,7 +290,7 @@ MCP distinguishes two error layers:
 | Code | Name | Tool(s) | Surfaces as |
 |---|---|---|---|
 | `-32001` | `NodeNotFound` | all | `[code:-32001] node 'X' not found in index` |
-| `-32002` | `ParameterParsingDisabled` | `por_trace` | `[code:-32002] index has no parameter nodes. Re-run \`epi sync --parameters\`…` |
+| `-32002` | `ParameterParsingDisabled` | `por_trace` | `[code:-32002] index was synced without parameter extraction (parameters_enabled = false). Re-run \`epi sync --parameters\` to enable.` |
 | `-32003` | `NotAParameter` | `por_trace` | `[code:-32003] node 'X' is type 'Y', not 'parameter'` |
 | `-32004` | `AssetTypeNotSupportedInV0` | `por_lineage` | `[code:-32004] data_asset nodes are deferred to v1+; see SCHEMA §2.6` |
 

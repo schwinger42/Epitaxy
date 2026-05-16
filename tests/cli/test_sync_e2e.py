@@ -68,15 +68,33 @@ def test_sync_index_contains_expected_edges(sample_repo: Path) -> None:
     ) in edge_pairs
 
 
-def test_sync_parameters_flag_fails_fast(sample_repo: Path) -> None:
-    """`--parameters` must exit 2 with informative message, NOT silently no-op.
+def test_sync_parameters_flag_runs_extraction(sample_repo: Path) -> None:
+    """PR4: `--parameters` actually extracts (was fail-fast in PR1–PR3).
 
-    Otherwise downstream `por_trace` ParameterParsingDisabled hint loops the user.
+    Fixture exercises all 4 SCHEMA §2.5 paths:
+    - Comment-marked (rank, DEFAULT_RANK, sample_temperature_K)
+    - ADR-claimed only (learning_rate — no comment, listed in
+      decisions/2026-04-rank-dim.md `decides:` frontmatter)
+    - Composite (rank also in 2026-04 `decides:`)
+    - Negative (cleanup_threshold has no marker + no ADR claim)
     """
     result = runner.invoke(app, ["sync", "--parameters"])
-    assert result.exit_code == 2
-    assert "not implemented in this build" in result.output
-    assert "PR4" in result.output
+    assert result.exit_code == 0, result.output
+    payload = json.loads(
+        (sample_repo / ".epitaxy" / "index.json").read_text()
+    )
+    assert payload["config"]["parameters_enabled"] is True
+    param_nodes = [n for n in payload["nodes"] if n["type"] == "parameter"]
+    param_names = sorted(n["name"] for n in param_nodes)
+    assert param_names == [
+        "DEFAULT_RANK",
+        "learning_rate",
+        "rank",
+        "sample_temperature_K",
+    ]
+    assert payload["stats"]["parameters"] == 4
+    # Negative case: cleanup_threshold has no marker + no ADR claim
+    assert "cleanup_threshold" not in param_names
 
 
 def test_sync_prints_gitignore_tip_when_missing(sample_repo: Path) -> None:
@@ -99,12 +117,13 @@ def test_version_flag(sample_repo: Path) -> None:
     assert "0.1.0" in result.output
 
 
-def test_sync_parameters_enabled_in_config_also_fails_fast(
+def test_sync_parameters_enabled_in_config_runs_extraction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`[tool.epitaxy] parameters_enabled = true` must trip the same fail-fast
-    as the `--parameters` CLI flag — otherwise the silent no-op bug returns
-    through config instead of through the flag (Codex review High-1)."""
+    """PR4: `[tool.epitaxy] parameters_enabled = true` now runs extraction
+    the same way as `--parameters` per CLI.md §6 precedence (both route to
+    the same effective `parameters_enabled` flag). Was fail-fast in PR1–PR3.
+    """
     repo = tmp_path / "repo"
     shutil.copytree(FIXTURE, repo)
     (repo / "pyproject.toml").write_text(
@@ -115,9 +134,9 @@ def test_sync_parameters_enabled_in_config_also_fails_fast(
     monkeypatch.chdir(repo)
 
     result = runner.invoke(app, ["sync"])
-
-    assert result.exit_code == 2, result.output
-    assert "parameter extraction is not implemented" in result.output
+    assert result.exit_code == 0, result.output
+    payload = json.loads((repo / ".epitaxy" / "index.json").read_text())
+    assert payload["config"]["parameters_enabled"] is True
 
 
 def test_sync_honors_output_config_key(
