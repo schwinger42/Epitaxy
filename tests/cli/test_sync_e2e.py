@@ -68,15 +68,25 @@ def test_sync_index_contains_expected_edges(sample_repo: Path) -> None:
     ) in edge_pairs
 
 
-def test_sync_parameters_flag_fails_fast(sample_repo: Path) -> None:
-    """`--parameters` must exit 2 with informative message, NOT silently no-op.
+def test_sync_parameters_flag_runs_extraction(sample_repo: Path) -> None:
+    """PR4: `--parameters` actually extracts now (was fail-fast in PR1–PR3).
 
-    Otherwise downstream `por_trace` ParameterParsingDisabled hint loops the user.
+    The PR1–PR3-era sample_repo has no `# epitaxy:param` markers + no ADR
+    `decides:` frontmatter, so extraction emits zero parameter nodes but
+    succeeds without erroring. The C6 commit adds a fixture with marked
+    parameters that exercises the full extraction path.
     """
     result = runner.invoke(app, ["sync", "--parameters"])
-    assert result.exit_code == 2
-    assert "not implemented in this build" in result.output
-    assert "PR4" in result.output
+    assert result.exit_code == 0, result.output
+    payload = json.loads(
+        (sample_repo / ".epitaxy" / "index.json").read_text()
+    )
+    # parameters_enabled honored in config trail
+    assert payload["config"]["parameters_enabled"] is True
+    # No parameter nodes yet (fixture doesn't mark any) — exercise scaffold
+    param_count = sum(1 for n in payload["nodes"] if n["type"] == "parameter")
+    assert param_count == 0
+    assert payload["stats"]["parameters"] == 0
 
 
 def test_sync_prints_gitignore_tip_when_missing(sample_repo: Path) -> None:
@@ -99,12 +109,13 @@ def test_version_flag(sample_repo: Path) -> None:
     assert "0.1.0" in result.output
 
 
-def test_sync_parameters_enabled_in_config_also_fails_fast(
+def test_sync_parameters_enabled_in_config_runs_extraction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`[tool.epitaxy] parameters_enabled = true` must trip the same fail-fast
-    as the `--parameters` CLI flag — otherwise the silent no-op bug returns
-    through config instead of through the flag (Codex review High-1)."""
+    """PR4: `[tool.epitaxy] parameters_enabled = true` now runs extraction
+    the same way as `--parameters` per CLI.md §6 precedence (both route to
+    the same effective `parameters_enabled` flag). Was fail-fast in PR1–PR3.
+    """
     repo = tmp_path / "repo"
     shutil.copytree(FIXTURE, repo)
     (repo / "pyproject.toml").write_text(
@@ -115,9 +126,9 @@ def test_sync_parameters_enabled_in_config_also_fails_fast(
     monkeypatch.chdir(repo)
 
     result = runner.invoke(app, ["sync"])
-
-    assert result.exit_code == 2, result.output
-    assert "parameter extraction is not implemented" in result.output
+    assert result.exit_code == 0, result.output
+    payload = json.loads((repo / ".epitaxy" / "index.json").read_text())
+    assert payload["config"]["parameters_enabled"] is True
 
 
 def test_sync_honors_output_config_key(

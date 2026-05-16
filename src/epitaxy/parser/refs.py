@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from ..store.models import Edge, Node
+from ..store.models import Edge, Node, ParameterNode
 
 
 @dataclass(frozen=True)
@@ -249,3 +249,45 @@ def extract_references(
             seen.add(edge_key)
 
     return edges
+
+
+# --------------------------------------------------------------------------- #
+# decided_by post-pass (PR4)                                                  #
+# --------------------------------------------------------------------------- #
+
+
+def populate_decided_by(nodes: list[Node], edges: list[Edge]) -> None:
+    """Mutate `ParameterNode.decided_by` in-place from `decides` edges.
+
+    Per SCHEMA §2.5: `decided_by` is the list of ADR IDs that decide this
+    parameter's value. Walks `decides` edges (which were emitted by
+    parser/markdown.py from ADR `decides:` frontmatter); for each edge whose
+    target parameter exists in the index, appends the source ADR ID to that
+    parameter's `decided_by` list.
+
+    Codex round-1 Low-11: graph-shape operations belong here (alongside the
+    references final-pass) rather than in cli/app.py orchestration.
+
+    **Dangling decides edges** (target parameter absent — SCHEMA §6 amended
+    in PR4 C1) leave `decided_by=None` on no real node. The dangling edge
+    remains in the index as drift signal at the edge level; `decided_by`
+    only carries resolvable provenance to keep node-level data faithful.
+
+    Deterministic ordering: `decided_by` lists are sorted by ADR ID so
+    `por_explain` / `por_trace` output is stable across runs (matches the
+    PR1+PR3 "alphabetical by ID" sort convention from MCP.md §5).
+    """
+    node_by_id: dict[str, Node] = {n.id: n for n in nodes}
+    # Collect first, then assign sorted lists — avoids mutating during iter.
+    deciders_for: dict[str, list[str]] = {}
+    for edge in edges:
+        if edge.type != "decides":
+            continue
+        target = node_by_id.get(edge.to)
+        if isinstance(target, ParameterNode):
+            deciders_for.setdefault(target.id, []).append(edge.from_)
+
+    for param_id, adr_ids in deciders_for.items():
+        param = node_by_id[param_id]
+        assert isinstance(param, ParameterNode)
+        param.decided_by = sorted(set(adr_ids))

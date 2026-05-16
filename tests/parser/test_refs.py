@@ -14,7 +14,7 @@ from epitaxy.parser.refs import (
     _resolve_to_repo_relative,
     extract_references,
 )
-from epitaxy.store.models import AdrNode, ModuleNode, PlanNode
+from epitaxy.store.models import AdrNode, Edge, ModuleNode, PlanNode
 
 
 # --------------------------------------------------------------------------- #
@@ -338,3 +338,134 @@ def test_duplicate_links_deduplicated(tmp_path: Path) -> None:
 def test_no_bodies_no_edges(tmp_path: Path) -> None:
     edges = extract_references(tmp_path, [_module("src/m.py")], [])
     assert edges == []
+
+
+# --------------------------------------------------------------------------- #
+# populate_decided_by post-pass (PR4 commit 4 / Codex round-1 Low-11)         #
+# --------------------------------------------------------------------------- #
+
+
+def test_populate_decided_by_populates_parameter_field() -> None:
+    """ADR decides → parameter: the parameter's `decided_by` lists the ADR."""
+    from epitaxy.parser.refs import populate_decided_by
+    from epitaxy.store.models import AdrNode, ParameterNode
+
+    param = ParameterNode(
+        id="param:m.py::fit::rank",
+        module="module:m.py",
+        scope="fit",
+        name="rank",
+        value="128",
+        line=3,
+        provenance="ast+comment",
+    )
+    adr = AdrNode(
+        id="adr:decisions/x.md",
+        path="decisions/x.md",
+        title="t",
+        provenance="frontmatter+body",
+    )
+    edge = Edge.model_validate({
+        "from": "adr:decisions/x.md",
+        "to": "param:m.py::fit::rank",
+        "type": "decides",
+        "source": "frontmatter:decides",
+        "provenance": "frontmatter",
+    })
+    populate_decided_by([param, adr], [edge])
+    assert param.decided_by == ["adr:decisions/x.md"]
+
+
+def test_populate_decided_by_dangling_target_leaves_node_unaffected() -> None:
+    """SCHEMA §6 (PR4 amendment): dangling decides edge → parameter doesn't
+    exist → no node mutation. The dangling edge stays in the graph as drift
+    signal at the EDGE level; `decided_by=None` at the node level is honest."""
+    from epitaxy.parser.refs import populate_decided_by
+    from epitaxy.store.models import AdrNode
+
+    adr = AdrNode(
+        id="adr:decisions/x.md",
+        path="decisions/x.md",
+        title="t",
+        provenance="frontmatter+body",
+    )
+    edge = Edge.model_validate({
+        "from": "adr:decisions/x.md",
+        "to": "param:m.py::ghost::removed",
+        "type": "decides",
+        "source": "frontmatter:decides",
+        "provenance": "frontmatter",
+    })
+    # The target parameter is absent from the nodes list — dangling edge case.
+    populate_decided_by([adr], [edge])
+    # No assertion needed — call should not raise. Edge stays valid.
+    assert edge.to == "param:m.py::ghost::removed"
+
+
+def test_populate_decided_by_multiple_adrs_decide_same_param() -> None:
+    """Two ADRs both decide the same parameter → decided_by has both IDs,
+    sorted (per the deterministic-ordering rule)."""
+    from epitaxy.parser.refs import populate_decided_by
+    from epitaxy.store.models import AdrNode, ParameterNode
+
+    param = ParameterNode(
+        id="param:m.py::fit::rank",
+        module="module:m.py",
+        scope="fit",
+        name="rank",
+        value="128",
+        line=3,
+        provenance="ast+comment",
+    )
+    adr_a = AdrNode(
+        id="adr:decisions/2026-04-zzz.md",
+        path="decisions/2026-04-zzz.md",
+        title="newer",
+        provenance="frontmatter+body",
+    )
+    adr_b = AdrNode(
+        id="adr:decisions/2026-02-aaa.md",
+        path="decisions/2026-02-aaa.md",
+        title="older",
+        provenance="frontmatter+body",
+    )
+    edges = [
+        Edge.model_validate({
+            "from": "adr:decisions/2026-04-zzz.md",
+            "to": "param:m.py::fit::rank",
+            "type": "decides",
+            "source": "frontmatter:decides",
+            "provenance": "frontmatter",
+        }),
+        Edge.model_validate({
+            "from": "adr:decisions/2026-02-aaa.md",
+            "to": "param:m.py::fit::rank",
+            "type": "decides",
+            "source": "frontmatter:decides",
+            "provenance": "frontmatter",
+        }),
+    ]
+    populate_decided_by([param, adr_a, adr_b], edges)
+    # Sorted lexicographically (deterministic for downstream stable output)
+    assert param.decided_by == [
+        "adr:decisions/2026-02-aaa.md",
+        "adr:decisions/2026-04-zzz.md",
+    ]
+
+
+def test_populate_decided_by_no_decides_edges_leaves_param_unchanged() -> None:
+    """Parameter with no decides edges keeps decided_by=None."""
+    from epitaxy.parser.refs import populate_decided_by
+    from epitaxy.store.models import ParameterNode
+
+    param = ParameterNode(
+        id="param:m.py::fit::rank",
+        module="module:m.py",
+        scope="fit",
+        name="rank",
+        value="128",
+        line=3,
+        provenance="ast+comment",
+    )
+    populate_decided_by([param], [])
+    assert param.decided_by is None
