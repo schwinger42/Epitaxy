@@ -2,20 +2,32 @@
 
 See docs/MCP.md §2–§4 for the contract.
 
-PR1 scope:
-- `por_explain` is fully functional for `module` and `function` nodes.
-- `por_trace` raises `ParameterParsingDisabled` (-32002) when the index has no
-  parameter nodes — the dominant PR1 case since `epi sync --parameters` fails
-  fast.
-- `por_lineage` always raises `AssetTypeNotSupportedInV0` (-32004); `data_asset`
-  node type is deferred to v1+ per SCHEMA §2.6.
+PR4 scope:
+- `por_explain` (PR1 + PR2 + PR3 ongoing) — full intent dump for any node
+  type in the SCHEMA-default-emit set (module/function/adr/plan/parameter).
+- `por_trace` (PR4) — decision trail for a tuned value. Gated on
+  `index.config.parameters_enabled` (Codex round-1 High-4); returns a
+  `TraceResult` with `decision_chain` newest-first via supersedes,
+  `parallel_heads` (always-present array; populated when multiple ADRs
+  decide the same parameter and none are superseded), and `notes`
+  (always-present array; populated when cycles in the supersedes chain
+  truncate the walk).
+- `por_lineage` — documented stub; always errors with
+  `AssetTypeNotSupportedInV0` (-32004) per SCHEMA §2.6 deferral.
 
 Each tool is split into a plain-function `_impl` (testable without the MCP SDK)
 and a `FastMCP`-decorated wrapper inside `build_server` (handles transport).
+
+Domain scope: `por_trace` is THE concrete instance of "agent checks intent
+before changing a tuned value." Applies equally to ML hyperparameters
+(`rank = 128`) and domain-constrained values (`sample_temperature_K = 77`,
+`chamber_pressure_Torr = 1e-6`, `validation_threshold = 0.95`). See
+[[feedback_epitaxy_product_framing]] for the broader product framing.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +36,7 @@ from mcp.shared.exceptions import McpError
 from mcp.types import ErrorData
 
 from epitaxy.store import Index, read_index
+from epitaxy.store.models import AdrNode, ParameterNode
 
 
 # Epitaxy-specific error codes per docs/MCP.md §6.
@@ -73,30 +86,162 @@ def por_explain_impl(index: Index, node_id: str) -> dict[str, Any]:
     }
 
 
-def por_trace_impl(index: Index, parameter_id: str) -> dict[str, Any]:
-    """Decision trail for a tuned parameter. See docs/MCP.md §3."""
-    has_parameters = any(n.type == "parameter" for n in index.nodes)
-    if not has_parameters:
-        raise _make_error(
-            ERR_PARAMETER_PARSING_DISABLED,
-            "index has no parameter nodes. "
-            "Re-run `epi sync --parameters` to enable. "
-            "(PR1 tracer-bullet build does not implement parameter "
-            "extraction; tracking in PR4.)",
+@dataclass(frozen=True)
+class _ChainResult:
+    """Return shape from `_build_decision_chain`.
+
+    `chain` — primary decision chain rooted at lex-first head, newest-first
+    via supersedes.
+    `parallel_heads` — ALL active heads (ADRs that decide this parameter
+    AND are not superseded). Populated when len > 1; empty list otherwise.
+    `notes` — cycle-truncation / no-head warnings, surfaced to the LLM
+    consumer via TraceResult.
+    """
+
+    chain: list[AdrNode]
+    parallel_heads: list[AdrNode] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+
+def _build_decision_chain(index: Index, parameter_id: str) -> _ChainResult:
+    """Walk supersedes chain backwards from the head ADR that decides
+    `parameter_id`. See docs/MCP.md §3 for the contract.
+
+    Codex round-1 Med-6: parallel decision heads (multiple ADRs decide the
+    same parameter, none superseded) → surface ALL heads in
+    `parallel_heads` so LLM consumers see the ambiguity instead of getting
+    a silently-picked single chain.
+
+    Codex round-1 Low-12: cycle detection via `visited` set. When a cycle
+    is hit, the walk truncates + a note is added to the `notes` list.
+    """
+    deciders = {
+        e.from_ for e in index.edges if e.type == "decides" and e.to == parameter_id
+    }
+    adr_by_id: dict[str, AdrNode] = {
+        n.id: n for n in index.nodes if isinstance(n, AdrNode)
+    }
+    relevant_adrs = [adr_by_id[d] for d in deciders if d in adr_by_id]
+    if not relevant_adrs:
+        return _ChainResult(chain=[], parallel_heads=[], notes=[])
+
+    sup_to = {e.from_: e.to for e in index.edges if e.type == "supersedes"}
+    sup_from = {e.to for e in index.edges if e.type == "supersedes"}
+    heads = sorted(
+        [a for a in relevant_adrs if a.id not in sup_from], key=lambda a: a.id
+    )
+
+    notes: list[str] = []
+    parallel_heads = heads if len(heads) > 1 else []
+    if not heads:
+        # All deciders are themselves superseded — defensive fallback to
+        # lex-first relevant ADR + surface in notes.
+        heads = sorted(relevant_adrs, key=lambda a: a.id)
+        notes.append(
+            "no decision head found (all deciding ADRs are themselves "
+            f"superseded); using lex-first ADR {heads[0].id!r} as chain root."
         )
 
-    # Forward-compat shape — unreachable in PR1.
+    primary_head = heads[0]
+    chain = [primary_head]
+    visited: set[str] = {primary_head.id}
+    current = primary_head.id
+    while current in sup_to:
+        next_id = sup_to[current]
+        next_adr = adr_by_id.get(next_id)
+        if next_adr is None:
+            # Dangling supersedes target per SCHEMA §6 — stop walk silently
+            # (the dangling edge is already in the graph; TraceResult
+            # doesn't need to repeat it).
+            break
+        if next_id in visited:
+            notes.append(
+                f"cycle in supersedes chain involving {next_id!r} "
+                f"(already visited); chain truncated at {current!r}."
+            )
+            break
+        chain.append(next_adr)
+        visited.add(next_id)
+        current = next_id
+
+    return _ChainResult(chain=chain, parallel_heads=parallel_heads, notes=notes)
+
+
+def por_trace_impl(index: Index, parameter_id: str) -> dict[str, Any]:
+    """Decision trail for a tuned value. See docs/MCP.md §3.
+
+    Per the broader product framing: this is THE concrete instance of "agent
+    checks intent before changing a tuned value." Applies equally to ML
+    hyperparameters AND domain-constrained values (physical constraints,
+    instrument settings, chemical thresholds, mathematical bounds,
+    validation rules) — Epitaxy preserves intent across both audiences.
+    See [[feedback_epitaxy_product_framing]].
+
+    Error semantics (Codex round-1 High-4 — gate on
+    `index.config.parameters_enabled`, NOT on "any parameter nodes exist"):
+
+    - `parameters_enabled == False`: ParameterParsingDisabled (-32002).
+      Re-run `epi sync --parameters`.
+    - `parameters_enabled == True` + parameter_id resolves to a
+      ParameterNode: return TraceResult.
+    - `parameters_enabled == True` + parameter_id resolves to a
+      non-parameter node: NotAParameter (-32003).
+    - `parameters_enabled == True` + parameter_id doesn't resolve:
+      NodeNotFound (-32001). (Distinct from ParameterParsingDisabled —
+      parsing WAS enabled; this specific ID just doesn't exist.)
+    """
+    if not index.config.parameters_enabled:
+        raise _make_error(
+            ERR_PARAMETER_PARSING_DISABLED,
+            "index was synced without parameter extraction "
+            "(parameters_enabled = false). "
+            "Re-run `epi sync --parameters` to enable.",
+        )
+
     node = next((n for n in index.nodes if n.id == parameter_id), None)
     if node is None:
-        raise _make_error(ERR_NODE_NOT_FOUND, f"node {parameter_id!r} not found")
-    if node.type != "parameter":
+        raise _make_error(
+            ERR_NODE_NOT_FOUND,
+            f"node {parameter_id!r} not found in index. Parameter extraction "
+            f"was enabled at sync time but no node with this ID exists — the "
+            f"assignment may not be marked with `# epitaxy:param` or claimed "
+            f"by any ADR's `decides:` frontmatter.",
+        )
+    if not isinstance(node, ParameterNode):
         raise _make_error(
             ERR_NOT_A_PARAMETER,
             f"node {parameter_id!r} is type {node.type!r}, not 'parameter'",
         )
-    raise McpError(
-        ErrorData(code=-32603, message="por_trace body not implemented in PR1 (tracking in PR4)")
-    )
+
+    parameter = node
+    chain_result = _build_decision_chain(index, parameter_id)
+
+    return {
+        "parameter": parameter.model_dump(by_alias=True, mode="json"),
+        "current_value": parameter.value,
+        "decision_chain": [
+            a.model_dump(by_alias=True, mode="json") for a in chain_result.chain
+        ],
+        "parallel_heads": [
+            a.model_dump(by_alias=True, mode="json")
+            for a in chain_result.parallel_heads
+        ],
+        "notes": list(chain_result.notes),
+        "provenance": {
+            "parameter": parameter.provenance,
+            "decisions": sorted(
+                {
+                    e.source
+                    for e in index.edges
+                    if (e.type == "decides" and e.to == parameter_id)
+                    or (
+                        e.type == "supersedes"
+                        and e.from_ in {a.id for a in chain_result.chain}
+                    )
+                }
+            ),
+        },
+    }
 
 
 def por_lineage_impl(index: Index, asset_id: str) -> dict[str, Any]:
