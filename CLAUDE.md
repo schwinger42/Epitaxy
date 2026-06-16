@@ -28,7 +28,9 @@ Do not narrow the product framing back to "documentation generator", "token save
 - **PR2 doc-parsing** (`5228c07`): adds `adr`+`plan` nodes + `references`+`supersedes` edges + POR YAML docstring frontmatter. Default-emit subset complete (4/4 node types, 3/3 edge types).
 - **PR3 HTTP transport + Progressive-Enhancement HTML** (`a7a47ce`): `epi mcp serve --transport http` with DNS-rebinding protection (`TransportSecuritySettings`, `--host` + `--allowed-origins` + `--allowed-hosts` flags); semantic HTML for `epi serve` with `<details>` drill-down, inline CSS, ~8-line auto-open JS island, dark-mode via `prefers-color-scheme`. SCHEMA §6 dangling-target rule honored end-to-end (PR2 parser + PR3 renderer).
 
-**Active: PR4 — `--parameters` + `ParameterNode` + `decides` edge + real `por_trace`.** Final v0 piece. Closes the opt-in `--parameters` fail-fast + the `por_trace` MCP stub. After PR4: v0 surface is feature-complete per SCHEMA §1.2 (5 emitted node types + 4 edge types; only `data_asset` + `decision` remain v1+ reserved). No version bump (stays `0.1.0`).
+**Shipped: PR4 — `--parameters` + `ParameterNode` + `decides` edge + real `por_trace`** (`9508651`, 2026-05-17). Closed the opt-in `--parameters` fail-fast + the `por_trace` MCP stub. v0.1.0 SCHEMA-default-emit surface feature-complete at that point.
+
+**Active: v0.2-PR1 — `follows` edge type** (this PR). First sub-PR of the v0.2 systems-engineer-dashboard milestone (spec merged PR #5). Closes the dogfood-discovered gap where POR `decisions:` was stored as data but emitted zero graph edges. After v0.2-PR1: 5 emitted node types + 5 edge types (`depends-on` / `references` / `supersedes` / `decides` / `follows`); only `data_asset` + `decision` remain v1+ reserved.
 
 Detail: [docs/ROADMAP.md](docs/ROADMAP.md) · specs: [docs/SCHEMA.md](docs/SCHEMA.md) · [docs/CLI.md](docs/CLI.md) · [docs/MCP.md](docs/MCP.md).
 

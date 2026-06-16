@@ -213,12 +213,16 @@ def test_parameter_node_present_post_pr4() -> None:
 
 
 def test_decides_edge_type_present_post_pr4() -> None:
-    """Forward-compat guard: `decides` IS in Edge.type Literal post-PR4."""
+    """Forward-compat guard: full Edge.type Literal set is current.
+
+    Post-PR4: `decides` added (parameter extraction).
+    Post-v0.2-PR1: `follows` added (POR `decisions:` → ADR).
+    """
     from typing import get_args
 
     type_field = Edge.model_fields["type"]
     allowed = set(get_args(type_field.annotation))
-    assert allowed == {"depends-on", "references", "supersedes", "decides"}
+    assert allowed == {"depends-on", "references", "supersedes", "decides", "follows"}
 
 
 def test_parameter_node_round_trip(tmp_path) -> None:

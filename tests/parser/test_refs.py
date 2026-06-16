@@ -14,7 +14,7 @@ from epitaxy.parser.refs import (
     _resolve_to_repo_relative,
     extract_references,
 )
-from epitaxy.store.models import AdrNode, Edge, ModuleNode, PlanNode
+from epitaxy.store.models import AdrNode, Edge, FunctionNode, ModuleNode, PlanNode
 
 
 # --------------------------------------------------------------------------- #
@@ -469,3 +469,233 @@ def test_populate_decided_by_no_decides_edges_leaves_param_unchanged() -> None:
     )
     populate_decided_by([param], [])
     assert param.decided_by is None
+
+
+# --------------------------------------------------------------------------- #
+# emit_follows_edges final-pass (v0.2-PR1)                                    #
+# --------------------------------------------------------------------------- #
+
+
+def _module_with_por(rel_path: str, por: dict | None) -> ModuleNode:
+    """Variant of _module that attaches a POR dict (or None)."""
+    return ModuleNode(
+        id=f"module:{rel_path}",
+        path=rel_path,
+        por=por,
+        provenance="ast",
+        extracted_at=datetime(2026, 5, 25, tzinfo=timezone.utc),
+    )
+
+
+def _function_with_por(
+    module_rel_path: str, qualname: str, por: dict | None
+) -> FunctionNode:
+    """FunctionNode factory with a POR dict attached."""
+    return FunctionNode(
+        id=f"function:{module_rel_path}::{qualname}",
+        module=f"module:{module_rel_path}",
+        name=qualname.rsplit(".", 1)[-1],
+        qualname=qualname,
+        signature=f"def {qualname.rsplit('.', 1)[-1]}()",
+        line=1,
+        por=por,
+        provenance="ast",
+    )
+
+
+def test_emits_follows_edge_for_module_por_decisions() -> None:
+    """Module with POR `decisions:` produces one follows edge per ADR entry."""
+    from epitaxy.parser.refs import emit_follows_edges
+
+    module = _module_with_por(
+        "src/m.py", {"decisions": ["adr:decisions/001-foo.md"]}
+    )
+    adr = _adr("decisions/001-foo.md")
+    edges = emit_follows_edges([module, adr])
+
+    assert len(edges) == 1
+    edge = edges[0]
+    assert edge.from_ == "module:src/m.py"
+    assert edge.to == "adr:decisions/001-foo.md"
+    assert edge.type == "follows"
+    assert edge.source == "por-frontmatter"
+    assert edge.provenance == "por-frontmatter"
+    assert edge.line is None
+
+
+def test_emits_follows_edge_for_function_por_decisions() -> None:
+    """Function with POR `decisions:` produces follows edge from function ID
+    (NOT from the containing module ID)."""
+    from epitaxy.parser.refs import emit_follows_edges
+
+    func = _function_with_por(
+        "src/m.py", "fit", {"decisions": ["adr:decisions/002-rank.md"]}
+    )
+    edges = emit_follows_edges([func])
+
+    assert len(edges) == 1
+    assert edges[0].from_ == "function:src/m.py::fit"
+    assert edges[0].to == "adr:decisions/002-rank.md"
+    assert edges[0].type == "follows"
+
+
+def test_dangling_follows_edge_when_target_adr_missing() -> None:
+    """POR decisions referencing a nonexistent ADR still emit the edge
+    (drift signal per SCHEMA §6 amended in v0.2-PR1). Silent emission —
+    no exception, consistent with `supersedes` / `decides` precedent."""
+    from epitaxy.parser.refs import emit_follows_edges
+
+    module = _module_with_por(
+        "src/m.py", {"decisions": ["adr:decisions/does-not-exist.md"]}
+    )
+    # Note: no ADR node in the input list — dangling target.
+    edges = emit_follows_edges([module])
+
+    assert len(edges) == 1
+    assert edges[0].to == "adr:decisions/does-not-exist.md"
+    assert edges[0].type == "follows"
+
+
+def test_no_follows_edges_when_decisions_field_absent() -> None:
+    """POR present but no `decisions:` key emits zero follows edges."""
+    from epitaxy.parser.refs import emit_follows_edges
+
+    module = _module_with_por(
+        "src/m.py", {"goal": "do a thing", "why": "because of X"}
+    )
+    edges = emit_follows_edges([module])
+    assert edges == []
+
+
+def test_multiple_follows_edges_one_per_decisions_entry() -> None:
+    """N entries in `decisions:` produce N follows edges from the same source."""
+    from epitaxy.parser.refs import emit_follows_edges
+
+    module = _module_with_por(
+        "src/m.py",
+        {
+            "decisions": [
+                "adr:decisions/a.md",
+                "adr:decisions/b.md",
+                "adr:decisions/c.md",
+            ]
+        },
+    )
+    edges = emit_follows_edges([module])
+
+    assert len(edges) == 3
+    targets = {e.to for e in edges}
+    assert targets == {
+        "adr:decisions/a.md",
+        "adr:decisions/b.md",
+        "adr:decisions/c.md",
+    }
+    assert all(e.from_ == "module:src/m.py" for e in edges)
+    assert all(e.type == "follows" for e in edges)
+
+
+def test_no_follows_edges_when_por_is_none() -> None:
+    """Module with `por=None` emits zero follows edges (no exception)."""
+    from epitaxy.parser.refs import emit_follows_edges
+
+    module = _module_with_por("src/m.py", None)
+    assert emit_follows_edges([module]) == []
+
+
+def test_follows_edges_returned_in_deterministic_order() -> None:
+    """Output edges are sorted by (from_, to) so index JSON is stable."""
+    from epitaxy.parser.refs import emit_follows_edges
+
+    # Two modules with shuffled decisions; multiple runs MUST produce the
+    # same ordering. Input order is deliberately reversed alphabetical.
+    module_b = _module_with_por(
+        "src/b.py",
+        {"decisions": ["adr:decisions/z.md", "adr:decisions/a.md"]},
+    )
+    module_a = _module_with_por(
+        "src/a.py",
+        {"decisions": ["adr:decisions/y.md", "adr:decisions/b.md"]},
+    )
+
+    runs = [emit_follows_edges([module_b, module_a]) for _ in range(10)]
+    keys = [[(e.from_, e.to) for e in run] for run in runs]
+    # All 10 runs identical
+    assert all(k == keys[0] for k in keys)
+    # And the canonical order is sorted ascending by (from_, to)
+    assert keys[0] == [
+        ("module:src/a.py", "adr:decisions/b.md"),
+        ("module:src/a.py", "adr:decisions/y.md"),
+        ("module:src/b.py", "adr:decisions/a.md"),
+        ("module:src/b.py", "adr:decisions/z.md"),
+    ]
+
+
+def test_composite_por_consumes_decisions_not_decides() -> None:
+    """POR with both `decisions:` (ADR IDs this code follows) AND `decides:`
+    (parameter names) emits follows edges ONLY from `decisions:`. The
+    `decides:` key is not a follows source — it's metadata for the
+    parameter-extraction path. Defends against accidental key confusion."""
+    from epitaxy.parser.refs import emit_follows_edges
+
+    module = _module_with_por(
+        "src/m.py",
+        {
+            "decisions": ["adr:decisions/follow-me.md"],
+            "decides": ["param:src/m.py::<module>::rank"],
+        },
+    )
+    edges = emit_follows_edges([module])
+
+    assert len(edges) == 1
+    assert edges[0].to == "adr:decisions/follow-me.md"
+    assert edges[0].type == "follows"
+    # And no edge with `to` matching the parameter ID.
+    assert not any(e.to.startswith("param:") for e in edges)
+
+
+def test_combined_module_and_function_por_in_same_file() -> None:
+    """Both module-level POR and function-level POR in the same file each
+    emit their own follows edges with distinct `from` IDs. Defends against
+    iteration bugs that might process only the first POR-bearing node."""
+    from epitaxy.parser.refs import emit_follows_edges
+
+    module = _module_with_por(
+        "src/m.py", {"decisions": ["adr:decisions/module-level.md"]}
+    )
+    func = _function_with_por(
+        "src/m.py", "fit", {"decisions": ["adr:decisions/function-level.md"]}
+    )
+    edges = emit_follows_edges([module, func])
+
+    assert len(edges) == 2
+    from_ids = {e.from_ for e in edges}
+    assert from_ids == {"module:src/m.py", "function:src/m.py::fit"}
+    targets = {e.to for e in edges}
+    assert targets == {
+        "adr:decisions/module-level.md",
+        "adr:decisions/function-level.md",
+    }
+
+
+# Edge tolerance — defensive checks for malformed POR (silently skip)
+def test_malformed_por_decisions_silently_skipped() -> None:
+    """Malformed POR cases that emit_follows_edges must tolerate without
+    raising: por=None, decisions field absent (covered above), decisions
+    is None, decisions is a non-list value, list contains non-string
+    entries. Each case emits zero edges from that node."""
+    from epitaxy.parser.refs import emit_follows_edges
+
+    nodes = [
+        _module_with_por("src/a.py", {"decisions": None}),
+        _module_with_por("src/b.py", {"decisions": "adr:not-a-list.md"}),
+        _module_with_por("src/c.py", {"decisions": [42, None, {"oops": 1}]}),
+        # Sanity: one well-formed node alongside the malformed ones to confirm
+        # we don't bail on the whole batch when one node is malformed.
+        _module_with_por(
+            "src/good.py", {"decisions": ["adr:decisions/real.md"]}
+        ),
+    ]
+    edges = emit_follows_edges(nodes)
+    assert len(edges) == 1
+    assert edges[0].from_ == "module:src/good.py"
+    assert edges[0].to == "adr:decisions/real.md"

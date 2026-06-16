@@ -2,8 +2,11 @@
 
 PR3 [B] rewrite per ROADMAP §4 Progressive Enhancement: semantic
 <section> / <details>/<summary> / <dl> structure for all 4 default
-node types (module / function / adr / plan) and all 3 default edge
-types (depends-on / references / supersedes).
+node types (module / function / adr / plan) and 3 of the 4 default-emit
+edge types (depends-on / references / supersedes). The fifth schema
+edge type `follows` (v0.2-PR1 — POR `decisions:` → ADR) is present in
+`.epitaxy/index.json` but NOT yet rendered in the drill-down UI;
+v0.2-PR2 (impact preview) is the planned surface for it.
 
 CSS + auto-open JS island land in PR3 commit 5 — this commit ships
 the semantic scaffold + content rendering only. The output is plain
