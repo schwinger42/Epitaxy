@@ -52,11 +52,18 @@ def test_sync_emits_all_four_default_node_types(sample_repo: Path) -> None:
 
 
 def test_sync_emits_all_three_default_edge_types(sample_repo: Path) -> None:
-    """SCHEMA §1.2 commits 3 of 4 edge types to the default parser (decides=PR4)."""
+    """SCHEMA §1.2 default-emit edges present in the sample fixture.
+
+    Without `--parameters`, the sample_repo emits 4 of the 5 schema edge
+    types: `depends-on` + `references` + `supersedes` (PR2-era surface) plus
+    `follows` (v0.2-PR1, because the sample fixture's POR YAML carries a
+    `decisions:` field on at least one module). `decides` requires the
+    `--parameters` opt-in (PR4); it's exercised in
+    `test_sync_parameters_e2e.py`."""
     runner.invoke(app, ["sync", "--quiet"])
     payload = _read_index(sample_repo)
     edge_types = sorted({e["type"] for e in payload["edges"]})
-    assert edge_types == ["depends-on", "references", "supersedes"]
+    assert edge_types == ["depends-on", "follows", "references", "supersedes"]
 
 
 def test_sync_stats_counts_match(sample_repo: Path) -> None:

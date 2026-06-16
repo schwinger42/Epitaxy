@@ -9,7 +9,7 @@
 This doc fixes the shape before parser implementation begins. Specifically it commits to:
 
 1. **Seven node types** that Epitaxy treats as first-class long-term — covering executable, decision, narrative, and lineage surfaces.
-2. **Four edge types** that wire nodes into a queryable graph.
+2. **Five edge types** that wire nodes into a queryable graph (v0.2-PR1 added `follows`).
 3. **v0 parser ships parsing for 5 of the 7 node types** — 4 default (`module` / `function` / `adr` / `plan`) plus `parameter` as opt-in via `epi sync --parameters` (PR4). The remaining 2 (`data_asset` / `decision`) are reserved in the schema so v1+ extensions don't require a breaking format change.
 4. **`.epitaxy/index.json`** — the concrete on-disk format that `epi sync` writes and `epi serve` / Pillar-4 MCP tools read.
 
@@ -173,7 +173,7 @@ ID scheme reserved: `decision:<adr-id>#<anchor>` where `<anchor>` is a markdown 
 
 ## 3. Edge types
 
-Four edge types in the v0 schema. Edges are directional.
+Five edge types in the v0 schema (v0.2-PR1 added `follows`). Edges are directional.
 
 | Type | From → To | Source |
 |---|---|---|
@@ -181,6 +181,7 @@ Four edge types in the v0 schema. Edges are directional.
 | `references` | `adr` / `plan` / `module` → any | Markdown body or docstring textual mention |
 | `supersedes` | `adr` → `adr` | ADR frontmatter `supersedes:` field |
 | `decides` | `adr` → `parameter` | ADR frontmatter `decides:` field (only emitted when `--parameters`) |
+| `follows` | `module` / `function` → `adr` | Python docstring POR YAML `decisions:` field (v0.2-PR1; default-emit) |
 
 Edge fields:
 
@@ -188,12 +189,14 @@ Edge fields:
 |---|---|---|---|
 | `from` | string | yes | source node ID |
 | `to` | string | yes | target node ID |
-| `type` | string | yes | one of the four above |
-| `source` | string | yes | e.g. `import` / `call` / `body-mention` / `frontmatter:supersedes` |
+| `type` | string | yes | one of the five above |
+| `source` | string | yes | e.g. `import` / `call` / `body-mention` / `frontmatter:supersedes` / `por-frontmatter` |
 | `line` | int | no | source line if applicable |
 | `provenance` | string | yes | same scheme as nodes |
 
 `derives-from` (data-asset lineage) and `modifies` (commit → module) are reserved for v1+ alongside their target node types; they do not appear in v0 output.
+
+**Format-version note** (v0.2-PR1): adding the `follows` enum value means `.epitaxy/index.json` files written by v0.2+ may contain edges that older Epitaxy releases (v0.1.x) cannot validate — Pydantic Literal rejects unknown values. Forward compat is preserved (new code reads old indexes fine); backward compat is intentionally not. Acceptable for pre-alpha; revisit if v1+ introduces breaking schema-versioning policy.
 
 ## 4. Inline POR structure (optional)
 
@@ -374,6 +377,8 @@ A default `epi sync` (no `--parameters`) writes:
 Note: the superseded ADR (`adr:decisions/2026-02-rank-baseline.md`) appears as the *target* of a `supersedes` edge even if the file no longer exists in the repo. v0 keeps the edge as a historical reference; v2+ drift detection can flag missing target nodes for cleanup.
 
 The same dangling-target rule applies to **`decides` edges**: an ADR may reference a parameter that no longer exists in source (renamed, removed, or refactored out). v0 emits the `decides` edge anyway — the dangling edge is *drift signal*, not a parse error. `por_explain` callers see the dangling target through normal incident-edge enumeration; the Pillar-3 drill-down site renders unresolvable edge targets via plain text rather than a broken anchor. The rule symmetrically covers both `supersedes` and `decides` because both represent historical / cross-cutting references where the target's continued existence is an evolution-of-the-graph concern, not a structural-validity concern.
+
+**v0.2-PR1 amendment**: the rule extends to **`follows` edges** by the same logic. A Python module / function docstring's POR `decisions:` field may reference an ADR that has been renamed, removed, or never existed (typo). v0.2 emits the `follows` edge anyway; the dangling edge persists as drift signal. Emission is silent (no stderr warning) — matches the existing `supersedes` / `decides` precedent so that batch sync runs stay quiet on user-introduced drift; v0.2-PR4 drift indicators surface dangling targets visually in the Pillar-3 UI. Permissive target handling: any string in `decisions:` becomes an edge target without `adr:` prefix validation — non-resolvable strings dangle, consistent with the "drift signal > parse error" principle.
 
 ## 7. What v0 deliberately does NOT do
 

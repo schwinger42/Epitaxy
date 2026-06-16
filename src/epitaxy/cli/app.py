@@ -15,7 +15,7 @@ import typer
 
 from epitaxy import __version__
 from epitaxy.parser import extract_references, parse_markdown, parse_repo
-from epitaxy.parser.refs import populate_decided_by
+from epitaxy.parser.refs import emit_follows_edges, populate_decided_by
 from epitaxy.store import Index, IndexConfig, IndexStats, write_index
 
 
@@ -220,7 +220,17 @@ def sync(
     )
     edges.extend(ref_edges)
 
-    # Final-pass 2 (PR4): populate ParameterNode.decided_by by walking
+    # Final-pass 2 (v0.2-PR1): follows edges from POR `decisions:` field
+    # on Module/Function nodes. Default-emit; dangling targets persist as
+    # drift signal per SCHEMA §6 (rule extended to `follows` in v0.2-PR1).
+    # Runs after extract_references (which doesn't care about por.decisions)
+    # and before populate_decided_by (which only reads `decides` edges,
+    # unrelated to `follows`). Grouping graph-shape emission together
+    # before node mutation matches the existing convention.
+    follows_edges = emit_follows_edges(nodes)
+    edges.extend(follows_edges)
+
+    # Final-pass 3 (PR4): populate ParameterNode.decided_by by walking
     # decides edges. Mutates ParameterNodes in-place. Only populates when
     # the target parameter exists in the index — dangling decides edges
     # (SCHEMA §6 amendment) leave decided_by=None at the node level; the
@@ -480,7 +490,8 @@ def _configure_http_transport(
             "warning: MCP HTTP transport is unauthenticated and exposes read-only "
             "repo intent data over the network: module file paths, function "
             "signatures + POR blocks, ADR/plan summaries + frontmatter, "
-            "depends-on/references/supersedes edges with line numbers, and "
+            "depends-on/references/supersedes/follows edges with line numbers "
+            "(plus decides edges when --parameters), and "
             "provenance metadata. 'Read-only' means no mutation risk but does NOT "
             "imply low sensitivity. Use --host 127.0.0.1 (the default) for "
             "local-only access, or pass --allowed-origins to restrict cross-origin "

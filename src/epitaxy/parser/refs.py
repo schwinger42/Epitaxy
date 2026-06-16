@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from ..store.models import Edge, Node, ParameterNode
+from ..store.models import Edge, FunctionNode, ModuleNode, Node, ParameterNode
 
 
 @dataclass(frozen=True)
@@ -291,3 +291,75 @@ def populate_decided_by(nodes: list[Node], edges: list[Edge]) -> None:
         param = node_by_id[param_id]
         assert isinstance(param, ParameterNode)
         param.decided_by = sorted(set(adr_ids))
+
+
+# --------------------------------------------------------------------------- #
+# follows-edge pass (v0.2-PR1)                                                #
+# --------------------------------------------------------------------------- #
+
+
+def emit_follows_edges(nodes: list[Node]) -> list[Edge]:
+    """Emit `follows` edges from POR `decisions:` field on Module/Function nodes.
+
+    Per SCHEMA §3 (extended in v0.2-PR1): every string entry in
+    `node.por["decisions"]` on a ModuleNode or FunctionNode becomes one
+    `follows` edge from that node's ID to the named ADR ID. Default-emit
+    (no `--parameters` gate); permissive target handling (no canonical-ID
+    validation, dangling targets pass through unchanged).
+
+    **Dangling target rule** per SCHEMA §6 (extended in v0.2-PR1): edges are
+    emitted even when the target ADR is absent from the index. The dangling
+    edge stays in the graph as a drift signal — `por_trace` / `por_lineage`
+    consumers know the source claims to follow ADR-X; if ADR-X is missing,
+    that's actionable drift, not a parse error. Silent emission matches the
+    existing `supersedes` / `decides` precedent; explicit stderr warnings
+    are deferred to a future `--strict` / `--check-dangling` flag if
+    dogfood evidence calls for it.
+
+    **Malformed-POR tolerance**: only processes nodes whose `por` is a dict
+    containing a list-shaped `decisions` value. POR with `por=None`,
+    `decisions` field absent, `decisions=None`, non-list `decisions`, or
+    non-string entries within the list are skipped silently — these are
+    structurally malformed POR distinct from the well-formed-but-dangling
+    case the rule above covers.
+
+    **Deterministic ordering**: returned edges are sorted by `(from_, to)`
+    so `.epitaxy/index.json` is stable across runs. Matches the
+    `extract_references` deduplication convention (PR2 Codex round-2 High-3).
+
+    Edge string conventions (per v0.2 spec §3.1 — merged PR #5):
+      source     = "por-frontmatter"
+      provenance = "por-frontmatter"
+      line       = None  (POR YAML block is structural, not line-anchored)
+
+    Pure function — takes nodes, returns new edges. No mutation of inputs.
+    Called from `cli/app.py` between `extract_references` and
+    `populate_decided_by`.
+    """
+    edges: list[Edge] = []
+    for node in nodes:
+        if not isinstance(node, (ModuleNode, FunctionNode)):
+            continue
+        por = node.por
+        if not isinstance(por, dict):
+            continue
+        decisions = por.get("decisions")
+        if not isinstance(decisions, list):
+            continue
+        for entry in decisions:
+            if not isinstance(entry, str):
+                continue
+            edges.append(
+                Edge.model_validate(
+                    {
+                        "from": node.id,
+                        "to": entry,
+                        "type": "follows",
+                        "source": "por-frontmatter",
+                        "provenance": "por-frontmatter",
+                    }
+                )
+            )
+
+    edges.sort(key=lambda e: (e.from_, e.to))
+    return edges

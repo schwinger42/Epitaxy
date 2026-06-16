@@ -2,12 +2,16 @@
 
 See docs/SCHEMA.md §2 (nodes), §3 (edges), §5 (index envelope).
 
-PR4 scope (parameter extraction): adds `ParameterNode` per SCHEMA §2.5,
-`AdrNode.decides` field per SCHEMA §2.3, and `"decides"` to the
-Edge.type Literal per SCHEMA §3. After PR4, the v0 default-emit surface
-is complete: 5 emitted node types (`module` / `function` / `adr` / `plan` /
-`parameter`) + 4 edge types (`depends-on` / `references` / `supersedes` /
-`decides`). Only `data_asset` + `decision` remain reserved for v1+.
+v0.2-PR1 scope (follows edge): adds `"follows"` to the Edge.type Literal
+per SCHEMA §3, emitted by `parser/refs.py:emit_follows_edges` from Python
+docstring POR `decisions:` field. After v0.2-PR1, the v0 surface contains
+5 emitted node types (`module` / `function` / `adr` / `plan` / `parameter`)
++ 5 edge types (`depends-on` / `references` / `supersedes` / `decides` /
+`follows`). Only `data_asset` + `decision` remain reserved for v1+.
+
+PR4 scope (parameter extraction, shipped 2026-05-17 `9508651`): added
+`ParameterNode` per SCHEMA §2.5, `AdrNode.decides` field per SCHEMA §2.3,
+and `"decides"` to the Edge.type Literal per SCHEMA §3.
 """
 
 from __future__ import annotations
@@ -122,7 +126,7 @@ class Edge(BaseModel):
 
     from_: str = Field(alias="from")
     to: str
-    type: Literal["depends-on", "references", "supersedes", "decides"]
+    type: Literal["depends-on", "references", "supersedes", "decides", "follows"]
     source: str
     line: int | None = None
     provenance: str
